@@ -348,6 +348,11 @@ label {
         &+.item {}
     }
 
+    .monitor-item .input--range .val {
+        width: 64px;
+        margin-right: 0;
+    }
+
     select {
         margin-right: 4px;
     }

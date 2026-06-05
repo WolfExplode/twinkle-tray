@@ -10,6 +10,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [state, setState] = useState({
     monitors: [],
     linkedLevelsActive: false,
+    temperatureEnabled: false,
     names: {},
     update: false,
     sleeping: false,
@@ -21,6 +22,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [init, setInit] = useState(false)
   const [lastLevels, setLastLevels] = useState([])
   const [softwareDim, setSoftwareDim] = useState({})
+  const [kelvinLevels, setKelvinLevels] = useState({})
   const [T] = useState(new TranslateReact({}, {}))
 
   const numMonitors = useMemo(() => {
@@ -41,6 +43,64 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.sendSettings({
       linkedLevelsActive
     })
+  }
+
+  const toggleColorTemperature = () => {
+    window.toggleColorTemperature(false)
+  }
+
+  const getKelvinForMonitor = (monitor) => kelvinLevels[monitor.key] ?? 6500
+
+  const getLinkedKelvin = () => {
+    for (const key in state.monitors) {
+      const monitor = state.monitors[key]
+      if (kelvinLevels[monitor.key] != null) return kelvinLevels[monitor.key]
+    }
+    return 6500
+  }
+
+  const handleKelvinChange = (kelvin, monitor, linked = false) => {
+    if (linked || state.linkedLevelsActive) {
+      const newKelvin = {}
+      for (let key in state.monitors) {
+        const m = state.monitors[key]
+        if ((m.type == "none" && m.hdr !== "active") || window.settings?.hideDisplays?.[m.key] === true) continue
+        newKelvin[m.key] = kelvin
+        window.updateWarmth(m.id, kelvin)
+      }
+      setKelvinLevels(newKelvin)
+    } else if (monitor) {
+      setKelvinLevels(prev => ({ ...prev, [monitor.key]: kelvin }))
+      window.updateWarmth(monitor.id, kelvin)
+    }
+  }
+
+  const renderKelvinSlider = (monitor, options = {}) => {
+    if (!state.temperatureEnabled) return null
+    const { linked = false, extended = false, name } = options
+    const level = linked ? getLinkedKelvin() : getKelvinForMonitor(monitor)
+    const slider = (
+      <Slider
+        key={(monitor?.key || "linked") + ".kelvin"}
+        name={name ?? T.t("PANEL_LABEL_COLOR_TEMPERATURE")}
+        id={monitor?.id}
+        level={level}
+        min={1000}
+        max={6500}
+        hwid={monitor?.key}
+        onChange={(val) => handleKelvinChange(val, linked ? null : monitor, linked)}
+        scrollAmount={window.settings?.scrollFlyoutAmount}
+      />
+    )
+    if (extended) {
+      return (
+        <div className="feature-row feature-temperature" key={(monitor?.key || "linked") + ".kelvin-row"}>
+          <div className="feature-icon"><span className="icon vfix">&#xEA80;</span></div>
+          {slider}
+        </div>
+      )
+    }
+    return slider
   }
 
   // Handle <Slider> changes
@@ -102,6 +162,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
       ...prev,
       monitors: newMonitors
     }))
+    if (window.settings?.adjustmentTimeTemperatureEnabled) window.requestWarmthLevels?.()
     // Delay initial adjustments
     if (!init) setTimeout(() => { setInit(true) }, 333)
   }
@@ -134,6 +195,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const recievedSettings = (e) => {
     const settings = e.detail
     const linkedLevelsActive = (settings.linkedLevelsActive ?? false)
+    const temperatureEnabled = (settings.adjustmentTimeTemperatureEnabled ?? false)
     const sleepAction = (settings.sleepAction ?? "none")
     const updateInterval = (settings.updateInterval || 500) * 1
     const remaps = (settings.remaps || {})
@@ -142,6 +204,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     setState(prev => ({
       ...prev,
       linkedLevelsActive,
+      temperatureEnabled,
       remaps,
       names,
       updateInterval,
@@ -150,6 +213,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     resetBrightnessInterval()
     updateMinMax()
     setDoBackgroundEvent(true)
+    if (temperatureEnabled) window.requestWarmthLevels?.()
   }
 
   const recievedUpdate = (e) => {
@@ -159,6 +223,18 @@ const BrightnessPanel = memo(function BrightnessPanel() {
 
   const recievedSleep = (e) => {
     setState(prev => ({ ...prev, sleeping: e.detail }))
+  }
+
+  const recievedWarmthLevels = (e) => {
+    const levels = e.detail
+    setKelvinLevels(prev => {
+      const updated = { ...prev }
+      for (const key in state.monitors) {
+        const monitor = state.monitors[key]
+        if (levels[monitor.id] != null) updated[monitor.key] = levels[monitor.id]
+      }
+      return updated
+    })
   }
 
 
@@ -203,6 +279,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.addEventListener("localizationUpdated", (e) => T.setLocalizationData(e.detail.desired, e.detail.default))
     window.addEventListener("updateUpdated", (e) => recievedUpdate(e))
     window.addEventListener("sleepUpdated", (e) => recievedSleep(e))
+    window.addEventListener("warmthLevelsUpdated", (e) => recievedWarmthLevels(e))
     window.addEventListener("isRefreshing", (e) => handleIsRefreshingUpdate(e))
 
     if (window.isAppX === false) {
@@ -212,6 +289,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     // Update brightness every interval, if changed
     window.requestSettings()
     window.requestMonitors()
+    if (window.settings?.adjustmentTimeTemperatureEnabled) window.requestWarmthLevels?.()
     window.ipc.send('request-localization')
     window.reactReady = true
 
@@ -221,6 +299,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
       window.removeEventListener("localizationUpdated")
       window.removeEventListener("updateUpdated")
       window.removeEventListener("sleepUpdated")
+      window.removeEventListener("warmthLevelsUpdated")
       window.removeEventListener("isRefreshing")
       window.removeEventListener("updateProgress")
     }
@@ -256,7 +335,10 @@ const BrightnessPanel = memo(function BrightnessPanel() {
           const linkedLevel = (linkedDim > 0 && monitor.brightness === 0) ? -linkedDim : monitor.brightness
           const softwareDimMin = -(window.settings?.softwareDimMax ?? 100)
           return (
-            <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={linkedLevel} min={softwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
+            <>
+              <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={linkedLevel} min={softwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
+              {renderKelvinSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_COLOR_TEMPERATURE") })}
+            </>
           )
         }
         return (<div className="no-displays-message">{T.t("GENERIC_NO_COMPATIBLE_DISPLAYS")}</div>)
@@ -345,6 +427,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                         </div>
                       </div>
                       <HDRSliders monitor={monitor} scrollAmount={window.settings?.scrollFlyoutAmount} />
+                      {renderKelvinSlider(monitor, { extended: true })}
                     </div>
                   )
                 }
@@ -354,6 +437,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                 return (
                   <div className="monitor-sliders" key={monitor.key}>
                     <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} />
+                    {renderKelvinSlider(monitor)}
                   </div>
                 )
               } else {
@@ -378,6 +462,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                         </div>
                       )
                     })()}
+                    {renderKelvinSlider(monitor, { extended: true })}
                     <DDCCISliders monitor={monitor} monitorFeatures={monitorFeatures} scrollAmount={window.settings?.scrollFlyoutAmount} />
                     {showHDRSliders ? <HDRSliders monitor={monitor} scrollAmount={window.settings?.scrollFlyoutAmount} /> : null}
                   </div>
@@ -405,6 +490,13 @@ const BrightnessPanel = memo(function BrightnessPanel() {
               &#xE71B;
             </div>
           }
+          <div
+            title={T.t("PANEL_LABEL_COLOR_TEMPERATURE")}
+            data-active={state.temperatureEnabled}
+            onClick={toggleColorTemperature}
+            className="temp">
+            &#xEA80;
+          </div>
           {
             window.settings.sleepAction !== "none" &&
             <div

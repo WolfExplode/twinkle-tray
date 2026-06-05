@@ -4,6 +4,8 @@ const PowerEvents = require("bindings")("windows_power_events");
 const MediaStatus = require("bindings")("windows_media_status");
 const AppStartup = require("bindings")("windows_app_startup");
 const WindowMaterial = require("bindings")("windows_window_material");
+const ColorGamma = require("bindings")("windows_color_gamma");
+const { getWhitePointForKelvin } = require("./color-temperature");
 
 module.exports = {
     WindowUtils: {
@@ -41,6 +43,17 @@ module.exports = {
         },
         setTransitionSupported: (hwnd, enabled = 1) => {
             WindowMaterial.setWindowAttribute(hwnd, 3, enabled)
+        }
+    },
+    ColorGamma: {
+        getDisplayCount: ColorGamma.getDisplayCount,
+        setGammaRamp: ColorGamma.setGammaRamp,
+        resetGammaRamp: ColorGamma.resetGammaRamp,
+        resetAllGammaRamps: ColorGamma.resetAllGammaRamps,
+        getWhitePointForKelvin,
+        setColorTemperature: (displayIndex, kelvin) => {
+            const { r, g, b } = getWhitePointForKelvin(kelvin)
+            return ColorGamma.setGammaRamp(displayIndex, r, g, b)
         }
     }
 }

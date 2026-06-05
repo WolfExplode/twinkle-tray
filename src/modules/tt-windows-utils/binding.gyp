@@ -55,6 +55,19 @@
       'defines': [ 'NAPI_CPP_EXCEPTIONS' ],
     },
     {
+      "target_name": "windows_color_gamma",
+      "cflags!": [ ],
+      "cflags_cc!": [ ],
+      "sources": [ "windows_color_gamma.cc" ],
+      "include_dirs": [
+        "<!@(node -p \"require('node-addon-api').include\")"
+      ],
+      'msvs_settings': {
+        'VCCLCompilerTool': { "ExceptionHandling": 1, 'AdditionalOptions': [ '-std:c++17' ] }
+      },
+      'defines': [ 'NAPI_CPP_EXCEPTIONS' ],
+    },
+    {
       "target_name": "windows_app_startup",
       "cflags!": [ ],
       "cflags_cc!": [ ],

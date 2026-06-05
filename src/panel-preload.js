@@ -97,6 +97,14 @@ function updateSoftwareDim(monitorId, level) {
     ipc.send('update-software-dim', { monitorId, level })
 }
 
+function updateWarmth(monitorId, kelvin) {
+    ipc.send('update-warmth', { monitorId, kelvin })
+}
+
+function requestWarmthLevels() {
+    ipc.send('request-warmth-levels')
+}
+
 function detectSunValley() {
     if(!window.reactReady) return false;
     try {
@@ -275,6 +283,15 @@ ipc.on('settings-updated', (event, settings) => {
     window.dispatchEvent(new CustomEvent('settingsUpdated', {
         detail: settings
     }))
+    if (settings.adjustmentTimeTemperatureEnabled) {
+        requestWarmthLevels()
+    }
+})
+
+ipc.on('warmth-levels-updated', (event, levels) => {
+    window.dispatchEvent(new CustomEvent('warmthLevelsUpdated', {
+        detail: levels
+    }))
 })
 
 // Localization recieved
@@ -437,6 +454,8 @@ window.addEventListener("setVCP", e => {
 window.ipc = ipc
 window.updateBrightness = updateBrightness
 window.updateSoftwareDim = updateSoftwareDim
+window.updateWarmth = updateWarmth
+window.requestWarmthLevels = requestWarmthLevels
 window.requestMonitors = requestMonitors
 window.openSettings = openSettings
 window.sendSettings = sendSettings
@@ -448,6 +467,7 @@ window.sendHeight = sendHeight
 window.panelAnimationDone = panelAnimationDone
 window.setPanelVisibility = setPanelVisibility
 window.turnOffDisplays = turnOffDisplays
+window.toggleColorTemperature = (openPanel = false) => ipc.send('toggle-color-temperature', openPanel)
 window.allMonitors = []
 window.lastUpdate = Date.now()
 window.showPanel = false

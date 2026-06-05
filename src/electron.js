@@ -67,7 +67,7 @@ const { fork, exec } = require('child_process');
 const { VerticalRefreshRateContext, addDisplayChangeListener } = require("win32-displayconfig");
 const refreshCtx = new VerticalRefreshRateContext();
 
-const {WindowUtils, MediaStatus, PowerEvents, AppStartup} = require("tt-windows-utils")
+const {WindowUtils, MediaStatus, PowerEvents, AppStartup, ColorGamma} = require("tt-windows-utils")
 const setWindowPos = () => { }
 const AccentColors = require("windows-accent-colors")
 const Acrylic = require("acrylic")
@@ -439,6 +439,7 @@ function pingAnalytics() {
 let monitors = {}
 let mainWindow;
 let tray = null
+let tempTray = null
 let lastTheme = false
 
 const panelSize = {
@@ -481,6 +482,7 @@ const defaultSettings = {
   adjustmentTimeIndividualDisplays: false,
   adjustmentTimeSpeed: "normal",
   adjustmentTimeAnimate: false,
+  adjustmentTimeTemperatureEnabled: false,
   adjustmentTimeLongitude: 0,
   adjustmentTimeLatitude: 0,
   checkTimeAtStartup: true,
@@ -519,6 +521,7 @@ const defaultSettings = {
   monitorFocusEnabled: false,
   monitorFocusMinutes: 10,
   monitorFocusDimLevel: 0,
+  monitorFocusSoftwareDim: 0,
   softwareDimMax: 100,
   idleRestoreSeconds: 0,
   wakeRestoreSeconds: 0,
@@ -803,6 +806,18 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       lastTimeEvent = false
       restartBackgroundUpdate()
       rebuildTray = true
+    }
+
+    if (newSettings.adjustmentTimeTemperatureEnabled !== undefined) {
+      if (settings.adjustmentTimeTemperatureEnabled) {
+        applyCurrentAdjustmentEvent(true, true)
+      } else {
+        for (const key in monitors) {
+          updateWarmth(monitors[key].id, 6500)
+        }
+      }
+      setTrayStatus()
+      setTrayMenu()
     }
 
     if (newSettings.hotkeys !== undefined) {
@@ -1751,6 +1766,57 @@ function showSoftwareDimOverlays() {
   }
 }
 
+const warmthLevels = {}
+
+function getMonitorDisplayIndex(monitorId) {
+  const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
+  const trayMonitors = Object.values(monitors || {})
+    .filter(m => m.bounds?.position !== undefined)
+    .sort((a, b) => a.bounds.position.x - b.bounds.position.x || a.bounds.position.y - b.bounds.position.y)
+  for (let i = 0; i < displays.length; i++) {
+    if (trayMonitors[i] && trayMonitors[i].id === monitorId) {
+      return i
+    }
+  }
+  return null
+}
+
+function updateWarmth(monitorId, kelvin = 6500) {
+  warmthLevels[monitorId] = kelvin
+
+  if (isWindowsUserIdle) return
+
+  const displayIndex = getMonitorDisplayIndex(monitorId)
+  if (displayIndex == null) return
+
+  if (!settings.adjustmentTimeTemperatureEnabled || kelvin >= 6500) {
+    ColorGamma.resetGammaRamp(displayIndex)
+    sendWarmthLevels()
+    setTrayStatus()
+    return
+  }
+
+  ColorGamma.setColorTemperature(displayIndex, kelvin)
+  sendWarmthLevels()
+  setTrayStatus()
+}
+
+function sendWarmthLevels() {
+  sendToAllWindows('warmth-levels-updated', warmthLevels)
+}
+
+function hideWarmthOverlays() {
+  ColorGamma.resetAllGammaRamps()
+}
+
+function showWarmthOverlays() {
+  for (const id in warmthLevels) {
+    if (warmthLevels[id] < 6500) {
+      updateWarmth(id, warmthLevels[id])
+    }
+  }
+}
+
 ipcMain.on('send-settings', (event, data) => {
   console.log("Recieved new settings", data.newSettings)
   writeSettings(data.newSettings, true, data.sendUpdate)
@@ -2026,7 +2092,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
 
     // Only send update if something changed
     if (JSON.stringify(newMonitors) !== JSON.stringify(oldMonitors)) {
-      setTrayPercent()
+      setTrayStatus()
       sendToAllWindows('monitors-updated', monitors)
     } else {
       console.log("===--- NO CHANGE ---===")
@@ -2247,7 +2313,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
       }, 500)
     }
 
-    setTrayPercent()
+    setTrayStatus()
     updateKnownDisplays()
   } catch (e) {
     debug.error("Could not update brightness", e)
@@ -2328,7 +2394,7 @@ function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, 
 }
 
 let currentTransition = null
-function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}) {
+function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500) {
   if (currentTransition !== null) clearInterval(currentTransition);
 
   // Slow down transition
@@ -2378,20 +2444,21 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
       if (numDone === Object.keys(monitors).length) {
         clearInterval(currentTransition);
         currentTransition = null
-        // Apply software dim once transition reaches the target
+        // Apply software dim and warmth once transition reaches the target
         for (let k in monitors) {
           let dimLevel = softwareDimLevel
           if (settings.adjustmentTimeIndividualDisplays) {
             dimLevel = (eventMonitorsSoftwareDim[monitors[k].id] >= 0 ? eventMonitorsSoftwareDim[monitors[k].id] : softwareDimLevel)
           }
           updateSoftwareDim(monitors[k].id, dimLevel)
+          updateWarmth(monitors[k].id, warmthKelvin)
         }
       }
     }
   }, settings.updateInterval * transitionIntervalMult)
 }
 
-function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}) {
+function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500) {
   for (let key in monitors) {
     const monitor = monitors[key]
     let normalized = level
@@ -2402,6 +2469,7 @@ function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 
     }
     updateBrightness(monitor.id, normalized)
     updateSoftwareDim(monitor.id, dimLevel)
+    updateWarmth(monitor.id, warmthKelvin)
     sendToAllWindows('monitors-updated', monitors)
   }
 }
@@ -2511,6 +2579,18 @@ ipcMain.on('update-brightness', function (event, data) {
 
 ipcMain.on('update-software-dim', (event, { monitorId, level }) => {
   updateSoftwareDim(monitorId, level)
+})
+
+ipcMain.on('update-warmth', (event, { monitorId, kelvin }) => {
+  updateWarmth(monitorId, kelvin)
+})
+
+ipcMain.on('request-warmth-levels', () => {
+  sendWarmthLevels()
+})
+
+ipcMain.on('toggle-color-temperature', (event, openPanel = false) => {
+  toggleColorTemperature(openPanel)
 })
 
 ipcMain.on('request-monitors', function (event, arg) {
@@ -2775,6 +2855,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
         if(!isWindowsUserIdle) {
           console.log("Displays have gone to sleep.")
           hideSoftwareDimOverlays()
+          hideWarmthOverlays()
 
           // If we were about to do a hardware event, stop.
           if (handleChangeTimeout1) clearTimeout(handleChangeTimeout1);
@@ -2790,6 +2871,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
           recentlyWokeUp = true
           handleMetricsChange("GUID_SESSION_USER_PRESENCE")
           setTimeout(showSoftwareDimOverlays, 500)
+          setTimeout(showWarmthOverlays, 500)
           setTimeout(() => {
             recentlyWokeUp = false
           },
@@ -3421,7 +3503,11 @@ app.on("activate", () => {
 
 app.on('quit', () => {
   try {
+    ColorGamma.resetAllGammaRamps()
+  } catch (e) {}
+  try {
     tray.destroy()
+    tempTray?.destroy?.()
   } catch (e) {
 
   }
@@ -3463,6 +3549,8 @@ function createTray() {
     }
   })
 
+  createTempTray()
+  setTrayStatus()
 }
 
 let recreatingTray = false
@@ -3470,7 +3558,9 @@ async function recreateTray() {
   if(recreatingTray) return;
   recreatingTray = true
   tray?.destroy?.()
+  tempTray?.destroy?.()
   tray = null
+  tempTray = null
   createTray()
   recreatingTray = false
 }
@@ -3480,6 +3570,7 @@ function setTrayMenu() {
 
   const contextMenu = Menu.buildFromTemplate([
     getTimeAdjustmentsMenuItem(),
+    getTemperatureMenuItem(),
     getDetectIdleMenuItem(),
     getProfilesMenuItem(),
     getPausableSeparatorMenuItem(),
@@ -3548,7 +3639,63 @@ function getDebugTrayMenuItems() {
   }
 }
 
-function setTrayPercent() {
+function getTemperatureMenuItem() {
+  return {
+    label: T.t("PANEL_LABEL_COLOR_TEMPERATURE"),
+    type: 'checkbox',
+    checked: settings.adjustmentTimeTemperatureEnabled,
+    click: (menuItem) => {
+      writeSettings({ adjustmentTimeTemperatureEnabled: menuItem.checked }, true, true)
+    }
+  }
+}
+
+function getCurrentKelvin() {
+  try {
+    if (!settings.adjustmentTimeTemperatureEnabled) return 6500
+    const activeLevels = Object.values(warmthLevels).filter(k => k > 0 && k < 6500)
+    if (activeLevels.length) {
+      return Math.round(activeLevels.reduce((a, b) => a + b, 0) / activeLevels.length)
+    }
+    const event = getCurrentAdjustmentEvent()
+    if (event?.kelvin != null) return event.kelvin
+  } catch (e) { }
+  return 6500
+}
+
+function getTempTrayIcon(enabled) {
+  const { nativeImage } = require('electron')
+  const fill = enabled ? '#FF8C00' : '#888888'
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="${fill}" stroke="#222" stroke-width="0.5"/></svg>`
+  return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
+}
+
+function createTempTray() {
+  if (tempTray != null) return
+  const { Tray } = require('electron')
+  tempTray = new Tray(getTempTrayIcon(settings.adjustmentTimeTemperatureEnabled))
+  updateTempTray()
+  tempTray.on('click', () => toggleColorTemperature(true))
+}
+
+function updateTempTray() {
+  if (!tempTray) return
+  tempTray.setImage(getTempTrayIcon(settings.adjustmentTimeTemperatureEnabled))
+  const kelvin = getCurrentKelvin()
+  let tip = T.t("PANEL_LABEL_COLOR_TEMPERATURE") + ': ' + (settings.adjustmentTimeTemperatureEnabled ? T.t("GENERIC_ON") : T.t("GENERIC_OFF"))
+  if (settings.adjustmentTimeTemperatureEnabled && kelvin < 6500) tip += ` (${kelvin}K)`
+  tempTray.setToolTip(tip)
+}
+
+function toggleColorTemperature(openPanel = false) {
+  const enabling = !settings.adjustmentTimeTemperatureEnabled
+  writeSettings({ adjustmentTimeTemperatureEnabled: enabling }, true, true)
+  if (openPanel && enabling) {
+    setTimeout(() => toggleTray(true), 100)
+  }
+}
+
+function setTrayStatus() {
   try {
     if (tray) {
       let averagePerc = 0
@@ -3559,11 +3706,18 @@ function setTrayPercent() {
           averagePerc += monitors[key].brightness
         }
       }
+      let tooltip = 'Twinkle Tray' + (isDev ? " (Dev)" : "")
+      const kelvin = getCurrentKelvin()
+      const showKelvin = settings.adjustmentTimeTemperatureEnabled && kelvin < 6500
       if (i > 0) {
         averagePerc = Math.floor(averagePerc / i)
-        tray.setToolTip('Twinkle Tray' + (isDev ? " (Dev)" : "") + ' (' + averagePerc + '%)')
+        tooltip += ' (' + averagePerc + '%' + (showKelvin ? ', ' + kelvin + 'K' : '') + ')'
+      } else if (showKelvin) {
+        tooltip += ' (' + kelvin + 'K)'
       }
+      tray.setToolTip(tooltip)
     }
+    updateTempTray()
   } catch (e) {
     console.log(e)
   }
@@ -4127,6 +4281,7 @@ powerMonitor.on("resume", () => {
   if(settings.restartOnWake) {
   // Screw it, just restart the whole app.
     tray.destroy()
+    tempTray?.destroy?.()
     app.relaunch()
     app.exit()
   }
@@ -4434,6 +4589,7 @@ function restoreMonitorFocusBrightness(monitor) {
     updateBrightness(monitor.id, savedLevel, true, "brightness")
     console.log(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
   }
+  updateSoftwareDim(monitor.id, 0)
   monitorFocusDimmed.delete(monitor.id)
   delete monitorPreDimBrightness[monitor.id]
   return true
@@ -4482,7 +4638,8 @@ function checkMonitorFocus() {
     if (now - lastVisited >= timeout) {
       monitorPreDimBrightness[monitor.id] = monitor.brightness
       monitorFocusDimmed.add(monitor.id)
-      updateBrightness(monitor.id, settings.monitorFocusDimLevel, true, "brightness")
+      updateBrightness(monitor.id, settings.monitorFocusDimLevel ?? 0, true, "brightness")
+      updateSoftwareDim(monitor.id, settings.monitorFocusSoftwareDim ?? 0)
       console.log(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
     }
   }
@@ -4517,6 +4674,7 @@ function resetMonitorFocusState() {
     if (monitor && savedLevel !== undefined) {
       updateBrightness(monitorId, savedLevel, true, "brightness")
     }
+    updateSoftwareDim(monitorId, 0)
   }
   monitorLastVisited = {}
   monitorPreDimBrightness = {}
@@ -4687,12 +4845,14 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
         refreshMonitors().then(() => {
           const eventSoftwareDim = foundEvent.softwareDim ?? 0
           const eventMonitorsSoftwareDim = foundEvent.monitorsSoftwareDim ?? {}
+          const eventKelvin = foundEvent.kelvin ?? 6500
           if (instant || settings.adjustmentTimeSpeed === "instant") {
-            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), eventSoftwareDim, eventMonitorsSoftwareDim)
+            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin)
           } else {
-            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), 1, eventSoftwareDim, eventMonitorsSoftwareDim)
+            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin)
           }
         })
+        setTrayStatus()
         return foundEvent
       }
     }

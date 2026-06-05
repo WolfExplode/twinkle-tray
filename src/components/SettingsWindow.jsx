@@ -689,8 +689,18 @@ export default class SettingsWindow extends PureComponent {
 
     getAdjustmentTimesMonitors = (time, index) => {
         const softwareDimMin = this.getSoftwareDimMin()
+        const tempEnabled = this.state.rawSettings?.adjustmentTimeTemperatureEnabled
+
+        const kelvinSlider = tempEnabled ? (
+            <Slider key={index + ".kelvin"} name="Color Temperature (K)" min={1000} max={6500} level={this.state.adjustmentTimes[index].kelvin ?? 6500} onChange={(value) => {
+                this.state.adjustmentTimes[index].kelvin = value
+                this.forceUpdate()
+                this.adjustmentTimesUpdated()
+            }} scrolling={false} />
+        ) : null
+
         if (this.state.adjustmentTimeIndividualDisplays) {
-            return Object.values(this.state.monitors).map((monitor, idx) => {
+            const monitorSliders = Object.values(this.state.monitors).map((monitor, idx) => {
                 if (monitor.type == "none") {
                     return (<div key={monitor.id + ".brightness"}></div>)
                 } else {
@@ -709,16 +719,20 @@ export default class SettingsWindow extends PureComponent {
                     return (<Slider key={monitor.id + ".brightness"} min={softwareDimMin} max={100} name={getMonitorName(monitor, this.state.names)} onChange={(value) => { this.getAdjustmentTimesMonitorsChanged(index, monitor, value) }} level={level} scrolling={false} />)
                 }
             })
+            return [...monitorSliders, kelvinSlider]
         } else {
             const level = this.getAdjustmentLevel(time.brightness, time.softwareDim)
             return (
-                <Slider key={index + ".brightness"} name={T.t("GENERIC_ALL_DISPLAYS")} min={softwareDimMin} max={100} level={level} onChange={(value) => {
-                    const split = this.splitAdjustmentLevel(value)
-                    this.state.adjustmentTimes[index].brightness = split.brightness
-                    this.state.adjustmentTimes[index].softwareDim = split.softwareDim
-                    this.forceUpdate()
-                    this.adjustmentTimesUpdated()
-                }} scrolling={false} />
+                <>
+                    <Slider key={index + ".brightness"} name={T.t("GENERIC_ALL_DISPLAYS")} min={softwareDimMin} max={100} level={level} onChange={(value) => {
+                        const split = this.splitAdjustmentLevel(value)
+                        this.state.adjustmentTimes[index].brightness = split.brightness
+                        this.state.adjustmentTimes[index].softwareDim = split.softwareDim
+                        this.forceUpdate()
+                        this.adjustmentTimesUpdated()
+                    }} scrolling={false} />
+                    {kelvinSlider}
+                </>
             )
         }
     }
@@ -1137,6 +1151,7 @@ export default class SettingsWindow extends PureComponent {
         this.state.adjustmentTimes.push({
             brightness: 50,
             softwareDim: 0,
+            kelvin: 6500,
             time: "12:30",
             monitors: {},
             monitorsSoftwareDim: {},
@@ -1303,6 +1318,7 @@ export default class SettingsWindow extends PureComponent {
                                 <div className="pageSection">
                                     <div className="sectionTitle">{T.t("SETTINGS_TIME_TITLE")}</div>
                                     <p>{T.t("SETTINGS_TIME_DESC")}</p>
+                                    <SettingsOption title="Color Temperature" description="When enabled, each time adjustment can set a warm tint on your displays (6500K = daylight, 1000K = candlelight)." input={this.renderToggle("adjustmentTimeTemperatureEnabled")} />
                                     <div className="adjustmentTimes">
                                         {this.getAdjustmentTimes()}
                                     </div>
@@ -1384,16 +1400,32 @@ export default class SettingsWindow extends PureComponent {
                                     <div className="sectionTitle">{T.t("SETTINGS_TIME_MONITOR_FOCUS_TITLE")}</div>
                                     <SettingsOption title={T.t("SETTINGS_TIME_MONITOR_FOCUS_TITLE")} description={T.t("SETTINGS_TIME_MONITOR_FOCUS_DESC")} input={this.renderToggle("monitorFocusEnabled")}>
                                         <SettingsChild content={
-                                            <div style={{ "display": "flex", "gap": "16px" }}>
-                                                <div>
-                                                    <label style={{ "textTransform": "capitalize" }}>{T.t("GENERIC_MINUTES")}</label>
-                                                    <input type="number" min="1" max="600" value={window.settings.monitorFocusMinutes * 1} onChange={(e) => this.setSetting("monitorFocusMinutes", e.target.value)} />
-                                                </div>
-                                                <div>
-                                                    <label>{T.t("SETTINGS_TIME_MONITOR_FOCUS_DIM_LEVEL")}</label>
-                                                    <input type="number" min="0" max="100" value={window.settings.monitorFocusDimLevel * 1} onChange={(e) => this.setSetting("monitorFocusDimLevel", e.target.value)} />
-                                                </div>
+                                            <div>
+                                                <label style={{ "textTransform": "capitalize" }}>{T.t("GENERIC_MINUTES")}</label>
+                                                <input type="number" min="1" max="600" value={window.settings.monitorFocusMinutes * 1} onChange={(e) => this.setSetting("monitorFocusMinutes", e.target.value)} />
                                             </div>
+                                        } />
+                                    </SettingsOption>
+                                    <SettingsOption title="Inactive monitor dim" description="Brightness for monitors you're not using. Drag left of 0 for software dim.">
+                                        <SettingsChild content={
+                                            <Slider
+                                                name="Inactive monitor dim"
+                                                min={this.getSoftwareDimMin()}
+                                                max={100}
+                                                level={this.getAdjustmentLevel(this.state.rawSettings.monitorFocusDimLevel ?? 0, this.state.rawSettings.monitorFocusSoftwareDim)}
+                                                onChange={(value) => {
+                                                    const split = this.splitAdjustmentLevel(value)
+                                                    const newSettings = {
+                                                        monitorFocusDimLevel: split.brightness,
+                                                        monitorFocusSoftwareDim: split.softwareDim
+                                                    }
+                                                    this.setState({ rawSettings: { ...this.state.rawSettings, ...newSettings } })
+                                                    window.sendSettings(newSettings)
+                                                }}
+                                                scrolling={false}
+                                                height={"short"}
+                                                icon={false}
+                                            />
                                         } />
                                     </SettingsOption>
                                 </div>
