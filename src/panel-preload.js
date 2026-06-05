@@ -92,6 +92,11 @@ function updateBrightness(index, level) {
     })
 }
 
+// Send software dim update. Level 0-100 (0 = off).
+function updateSoftwareDim(monitorId, level) {
+    ipc.send('update-software-dim', { monitorId, level })
+}
+
 function detectSunValley() {
     if(!window.reactReady) return false;
     try {
@@ -431,6 +436,7 @@ window.addEventListener("setVCP", e => {
 
 window.ipc = ipc
 window.updateBrightness = updateBrightness
+window.updateSoftwareDim = updateSoftwareDim
 window.requestMonitors = requestMonitors
 window.openSettings = openSettings
 window.sendSettings = sendSettings

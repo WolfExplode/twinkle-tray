@@ -674,33 +674,65 @@ export default class SettingsWindow extends PureComponent {
 
     }
 
+    getSoftwareDimMin = () => -(window.settings?.softwareDimMax ?? 100)
+
+    getAdjustmentLevel = (brightness, softwareDim) => {
+        const dim = softwareDim ?? 0
+        if (dim > 0 && brightness === 0) return -dim
+        return brightness ?? 0
+    }
+
+    splitAdjustmentLevel = (level) => ({
+        brightness: Math.max(0, level),
+        softwareDim: level < 0 ? Math.min(100, -level) : 0
+    })
+
     getAdjustmentTimesMonitors = (time, index) => {
+        const softwareDimMin = this.getSoftwareDimMin()
         if (this.state.adjustmentTimeIndividualDisplays) {
             return Object.values(this.state.monitors).map((monitor, idx) => {
                 if (monitor.type == "none") {
                     return (<div key={monitor.id + ".brightness"}></div>)
                 } else {
-                    let level = time.brightness
-                    if (this.state.adjustmentTimes[index] && this.state.adjustmentTimes[index].monitors && this.state.adjustmentTimes[index].monitors[monitor.id] >= 0) {
-                        level = this.state.adjustmentTimes[index].monitors[monitor.id]
+                    let brightness = time.brightness
+                    let softwareDim = 0
+                    if (this.state.adjustmentTimes[index]?.monitors && this.state.adjustmentTimes[index].monitors[monitor.id] >= 0) {
+                        brightness = this.state.adjustmentTimes[index].monitors[monitor.id]
                     } else {
-                        // No value set, use shared value
-                        this.state.adjustmentTimes[index].monitors[monitor.id] = level
+                        this.state.adjustmentTimes[index].monitors[monitor.id] = brightness
                         this.adjustmentTimesUpdated()
                     }
-                    return (<Slider key={monitor.id + ".brightness"} min={0} max={100} name={getMonitorName(monitor, this.state.names)} onChange={(value) => { this.getAdjustmentTimesMonitorsChanged(index, monitor, value) }} level={level} scrolling={false} />)
+                    if (this.state.adjustmentTimes[index]?.monitorsSoftwareDim && this.state.adjustmentTimes[index].monitorsSoftwareDim[monitor.id] >= 0) {
+                        softwareDim = this.state.adjustmentTimes[index].monitorsSoftwareDim[monitor.id]
+                    }
+                    const level = this.getAdjustmentLevel(brightness, softwareDim)
+                    return (<Slider key={monitor.id + ".brightness"} min={softwareDimMin} max={100} name={getMonitorName(monitor, this.state.names)} onChange={(value) => { this.getAdjustmentTimesMonitorsChanged(index, monitor, value) }} level={level} scrolling={false} />)
                 }
             })
         } else {
-            return (<Slider key={index + ".brightness"} name={T.t("GENERIC_ALL_DISPLAYS")} min={0} max={100} level={time.brightness} onChange={(value, slider) => { this.state.adjustmentTimes[index].brightness = value; this.forceUpdate(); this.adjustmentTimesUpdated() }} scrolling={false} />)
+            const level = this.getAdjustmentLevel(time.brightness, time.softwareDim)
+            return (
+                <Slider key={index + ".brightness"} name={T.t("GENERIC_ALL_DISPLAYS")} min={softwareDimMin} max={100} level={level} onChange={(value) => {
+                    const split = this.splitAdjustmentLevel(value)
+                    this.state.adjustmentTimes[index].brightness = split.brightness
+                    this.state.adjustmentTimes[index].softwareDim = split.softwareDim
+                    this.forceUpdate()
+                    this.adjustmentTimesUpdated()
+                }} scrolling={false} />
+            )
         }
     }
 
-    getAdjustmentTimesMonitorsChanged = (index, monitor, value) => {
+    getAdjustmentTimesMonitorsChanged = (index, monitor, level) => {
+        const split = this.splitAdjustmentLevel(level)
         if (this.state.adjustmentTimes[index].monitors === undefined) {
             this.state.adjustmentTimes[index].monitors = {}
         }
-        this.state.adjustmentTimes[index].monitors[monitor.id] = value
+        if (this.state.adjustmentTimes[index].monitorsSoftwareDim === undefined) {
+            this.state.adjustmentTimes[index].monitorsSoftwareDim = {}
+        }
+        this.state.adjustmentTimes[index].monitors[monitor.id] = split.brightness
+        this.state.adjustmentTimes[index].monitorsSoftwareDim[monitor.id] = split.softwareDim
         this.forceUpdate();
         this.adjustmentTimesUpdated()
     }
@@ -1104,8 +1136,10 @@ export default class SettingsWindow extends PureComponent {
     addAdjustmentTime = () => {
         this.state.adjustmentTimes.push({
             brightness: 50,
+            softwareDim: 0,
             time: "12:30",
             monitors: {},
+            monitorsSoftwareDim: {},
             useSunCalc: false,
             sunCalc: "sunrise"
         })
@@ -1321,6 +1355,28 @@ export default class SettingsWindow extends PureComponent {
                                                 </div>
                                             } />
                                     </SettingsOption>
+                                    <SettingsOption title="Idle dim" description="Brightness when idle. Drag left of 0 for software dim.">
+                                        <SettingsChild content={
+                                            <Slider
+                                                name="Idle dim"
+                                                min={this.getSoftwareDimMin()}
+                                                max={100}
+                                                level={this.getAdjustmentLevel(this.state.rawSettings.detectIdleBrightness ?? 0, this.state.rawSettings.detectIdleSoftwareDim)}
+                                                onChange={(value) => {
+                                                    const split = this.splitAdjustmentLevel(value)
+                                                    const newSettings = {
+                                                        detectIdleBrightness: split.brightness,
+                                                        detectIdleSoftwareDim: split.softwareDim
+                                                    }
+                                                    this.setState({ rawSettings: { ...this.state.rawSettings, ...newSettings } })
+                                                    window.sendSettings(newSettings)
+                                                }}
+                                                scrolling={false}
+                                                height={"short"}
+                                                icon={false}
+                                            />
+                                        } />
+                                    </SettingsOption>
                                     <SettingsOption title={T.t("SETTINGS_TIME_IDLE_FS_TITLE")} description={T.t("SETTINGS_TIME_IDLE_FS_DESC")} input={this.renderToggle("detectIdleCheckFullscreen")} />
                                     <SettingsOption title={T.t("SETTINGS_TIME_IDLE_MEDIA_TITLE")} description={T.t("SETTINGS_TIME_IDLE_MEDIA_DESC")} input={this.renderToggle("detectIdleMedia")} />
                                 </div>
@@ -1387,6 +1443,15 @@ export default class SettingsWindow extends PureComponent {
                                     <p>{T.t("SETTINGS_MONITORS_NORMALIZE_DESC")}</p>
                                     <p>{T.t("SETTINGS_MONITORS_CALIBRATION_DESC")}</p>
                                     {this.getMinMaxMonitors()}
+                                </div>
+
+                                <div className="pageSection">
+                                    <div className="sectionTitle">Software Dim</div>
+                                    <SettingsOption title="Max software dim" description="How far the brightness slider can extend into the software dim zone (0–100%). Software dim works by placing a transparent black overlay on the display.">
+                                        <SettingsChild content={
+                                            <Slider min={0} max={100} level={window.settings.softwareDimMax ?? 100} onChange={(value) => this.setSetting("softwareDimMax", value)} scrolling={false} height={"short"} icon={false} />
+                                        } />
+                                    </SettingsOption>
                                 </div>
 
                             </SettingsPage>

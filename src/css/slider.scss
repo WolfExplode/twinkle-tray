@@ -118,6 +118,45 @@
             margin-bottom: -1px;
         }
     }
+
+    // Hardware brightness fill (right of 0-mark, accent color)
+    .progress-hardware {
+        background: var(--system-accent-medium);
+        height: 2px;
+        position: absolute;
+        top: 50%;
+        margin-top: -1px;
+        pointer-events: none;
+    }
+
+    // Software dim fill (left of 0-mark, muted blue-gray tone)
+    .progress-software-dim {
+        background: var(--system-accent-medium);
+        opacity: 0.35;
+        height: 2px;
+        position: absolute;
+        top: 50%;
+        margin-top: -1px;
+        pointer-events: none;
+    }
+
+    // Thin tick at the 0% hardware mark
+    .dim-zone-marker {
+        position: absolute;
+        top: 50%;
+        width: 2px;
+        height: 10px;
+        margin-top: -5px;
+        background: var(--slider-track-color);
+        border-radius: 1px;
+        pointer-events: none;
+        opacity: 0.7;
+    }
+
+    // Number display turns muted when in the software dim zone
+    &[data-software-dim="active"] .val {
+        opacity: 0.55;
+    }
 }
 
 
@@ -256,6 +295,32 @@ body[data-is-win11="true"]:not(.ignoreWin11) {
 
             }
     
+        }
+
+        .progress-hardware {
+            height: 4px;
+            border-radius: 50px;
+            margin-top: 0px;
+            background-color: var(--system-accent-dark1);
+            @media screen and (prefers-color-scheme: dark) {
+                background-color: var(--system-accent-light2);
+            }
+        }
+
+        .progress-software-dim {
+            height: 4px;
+            border-radius: 50px;
+            margin-top: 0px;
+            background-color: var(--system-accent-dark1);
+            opacity: 0.35;
+            @media screen and (prefers-color-scheme: dark) {
+                background-color: var(--system-accent-light2);
+            }
+        }
+
+        .dim-zone-marker {
+            height: 12px;
+            margin-top: -6px;
         }
     }
 

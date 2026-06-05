@@ -54,6 +54,30 @@ export default class Slider extends Component {
         return { width: (0 + (((level - min) * (100 / (max - min))))) + "%" }
     }
 
+    // Progress fill for the hardware-brightness zone (0 → thumb), used when min < 0
+    hardwareProgressStyle = () => {
+        const min = (this.props.min || 0) * 1
+        const max = (this.props.max || 100) * 1
+        const totalRange = max - min
+        const level = this.cap(this.props.level)
+        if (level < 0) return { width: 0 }
+        const left = (-min) / totalRange * 100
+        const width = level / totalRange * 100
+        return { left: left + '%', width: width + '%' }
+    }
+
+    // Progress fill for the software-dim zone (thumb → 0-mark), used when min < 0 and level < 0
+    softwareDimProgressStyle = () => {
+        const min = (this.props.min || 0) * 1
+        const max = (this.props.max || 100) * 1
+        const totalRange = max - min
+        const level = this.cap(this.props.level)
+        if (level >= 0) return { width: 0 }
+        const thumbPos = (level - min) / totalRange * 100
+        const width = (-level) / totalRange * 100
+        return { left: thumbPos + '%', width: width + '%' }
+    }
+
     constructor(props) {
         super(props);
         this.state = {
@@ -74,13 +98,24 @@ export default class Slider extends Component {
         const min = (this.props.min || 0) * 1
         const max = (this.props.max || 100) * 1
         const level = this.cap(this.props.level)
+        const hasSoftwareDim = min < 0
+        const totalRange = max - min
+        const zeroMarkPos = hasSoftwareDim ? ((-min) / totalRange * 100) + '%' : null
         return (
             <div className="monitor-item" onWheel={this.handleWheel}>
                 {this.getName()}
-                <div className="input--range" data-height={this.props.height}>
+                <div className="input--range" data-height={this.props.height} data-software-dim={hasSoftwareDim && level < 0 ? "active" : undefined}>
                     <div className="rangeGroup">
                         <input type="range" min={min} max={max} value={level} data-percent={level + "%"} onChange={this.handleChange} className="range" />
-                        <div className="progress" style={this.progressStyle()}></div>
+                        {hasSoftwareDim ? (
+                            <>
+                                <div className="progress progress-software-dim" style={this.softwareDimProgressStyle()}></div>
+                                <div className="progress progress-hardware" style={this.hardwareProgressStyle()}></div>
+                                <div className="dim-zone-marker" style={{ left: zeroMarkPos }}></div>
+                            </>
+                        ) : (
+                            <div className="progress" style={this.progressStyle()}></div>
+                        )}
                     </div>
                     <input type="number" min={min} max={max} value={Math.floor(level)} onChange={this.handleChange} className="val" />
                 </div>

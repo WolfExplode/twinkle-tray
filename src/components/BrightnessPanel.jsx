@@ -20,6 +20,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [levelsChanged, setLevelsChanged] = useState(false)
   const [init, setInit] = useState(false)
   const [lastLevels, setLastLevels] = useState([])
+  const [softwareDim, setSoftwareDim] = useState({})
   const [T] = useState(new TranslateReact({}, {}))
 
   const numMonitors = useMemo(() => {
@@ -43,21 +44,32 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   // Handle <Slider> changes
+  // level can be -100..100: negative values mean software dim, 0-100 is hardware brightness
   const handleChange = (level, slider) => {
     const monitors = { ...state.monitors }
     const sliderMonitor = monitors[slider.props.hwid]
+    const hardwareLevel = Math.max(0, level)
+    const dimLevel = level < 0 ? Math.min(100, -level) : 0
+
     if (numMonitors && state.linkedLevelsActive) {
       // Update all monitors (linked)
+      const newDim = {}
       for (let key in monitors) {
-        const monitor = monitors[key]
-        monitor.brightness = level
+        monitors[key].brightness = hardwareLevel
+        newDim[key] = dimLevel
+        window.updateSoftwareDim(monitors[key].id, dimLevel)
       }
+      setSoftwareDim(newDim)
       setState(prev => ({ ...prev, monitors }))
       setLevelsChanged(true)
       if (state.updateInterval === 999) syncBrightness()
     } else if (numMonitors > 0) {
       // Update single monitor
-      if (sliderMonitor) sliderMonitor.brightness = level;
+      if (sliderMonitor) {
+        sliderMonitor.brightness = hardwareLevel
+        setSoftwareDim(prev => ({ ...prev, [slider.props.hwid]: dimLevel }))
+        window.updateSoftwareDim(sliderMonitor.id, dimLevel)
+      }
       setState(prev => ({ ...prev, monitors }))
       setLevelsChanged(true)
       if (state.updateInterval === 999) syncBrightness()
@@ -71,6 +83,21 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     setLastLevels([])
     // Reset panel height so it's recalculated
     panelHeight = -1
+
+    // If hardware brightness came back above 0, clear any software dim for that monitor
+    setSoftwareDim(prev => {
+      const updated = { ...prev }
+      let changed = false
+      for (const key in newMonitors) {
+        if (newMonitors[key].brightness > 0 && updated[key] > 0) {
+          updated[key] = 0
+          window.updateSoftwareDim(newMonitors[key].id, 0)
+          changed = true
+        }
+      }
+      return changed ? updated : prev
+    })
+
     setState(prev => ({
       ...prev,
       monitors: newMonitors
@@ -225,8 +252,11 @@ const BrightnessPanel = memo(function BrightnessPanel() {
         }
         if (lastValidMonitor) {
           const monitor = lastValidMonitor
+          const linkedDim = softwareDim[monitor.key] ?? 0
+          const linkedLevel = (linkedDim > 0 && monitor.brightness === 0) ? -linkedDim : monitor.brightness
+          const softwareDimMin = -(window.settings?.softwareDimMax ?? 100)
           return (
-            <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={monitor.brightness} min={0} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
+            <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={linkedLevel} min={softwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
           )
         }
         return (<div className="no-displays-message">{T.t("GENERIC_NO_COMPATIBLE_DISPLAYS")}</div>)
@@ -318,9 +348,12 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                     </div>
                   )
                 }
+                const monDim = softwareDim[monitor.key] ?? 0
+                const monLevel = (monDim > 0 && monitor.brightness === 0) ? -monDim : monitor.brightness
+                const monSoftwareDimMin = -(window.settings?.softwareDimMax ?? 100)
                 return (
                   <div className="monitor-sliders" key={monitor.key}>
-                    <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monitor.brightness} min={0} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} />
+                    <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} />
                   </div>
                 )
               } else {
@@ -334,12 +367,17 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                       </div>
                     </div>
                     {/* For HDR displays that only support SDR, hide the regular brightness slider. */}
-                    { !isHDROnlySDR && (
-                      <div className="feature-row feature-brightness">
-                        <div className="feature-icon"><span className="icon vfix">&#xE706;</span></div>
-                        <Slider id={monitor.id} level={monitor.brightness} min={0} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
-                      </div>
-                    )}
+                    { !isHDROnlySDR && (() => {
+                      const extDim = softwareDim[monitor.key] ?? 0
+                      const extLevel = (extDim > 0 && monitor.brightness === 0) ? -extDim : monitor.brightness
+                      const extSoftwareDimMin = -(window.settings?.softwareDimMax ?? 100)
+                      return (
+                        <div className="feature-row feature-brightness">
+                          <div className="feature-icon"><span className="icon vfix">&#xE706;</span></div>
+                          <Slider id={monitor.id} level={extLevel} min={extSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
+                        </div>
+                      )
+                    })()}
                     <DDCCISliders monitor={monitor} monitorFeatures={monitorFeatures} scrollAmount={window.settings?.scrollFlyoutAmount} />
                     {showHDRSliders ? <HDRSliders monitor={monitor} scrollAmount={window.settings?.scrollFlyoutAmount} /> : null}
                   </div>

@@ -514,9 +514,12 @@ const defaultSettings = {
   detectIdleTimeMinutes: 5,
   detectIdleCheckFullscreen: false,
   detectIdleMedia: false,
+  detectIdleBrightness: 0,
+  detectIdleSoftwareDim: 0,
   monitorFocusEnabled: false,
   monitorFocusMinutes: 10,
   monitorFocusDimLevel: 0,
+  softwareDimMax: 100,
   idleRestoreSeconds: 0,
   wakeRestoreSeconds: 0,
   hardwareRestoreSeconds: 0,
@@ -1661,6 +1664,93 @@ function sendToAllWindows(eventName, data) {
   }
 }
 
+//
+// Software Dim Overlays
+//
+
+const softwareDimOverlays = {}
+const softwareDimLevels = {}
+
+function getSoftwareDimDisplayBounds(monitorId) {
+  const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
+  const trayMonitors = Object.values(monitors || {})
+    .filter(m => m.bounds?.position !== undefined)
+    .sort((a, b) => a.bounds.position.x - b.bounds.position.x || a.bounds.position.y - b.bounds.position.y)
+  for (let i = 0; i < displays.length; i++) {
+    if (trayMonitors[i] && trayMonitors[i].id === monitorId) {
+      return displays[i].bounds
+    }
+  }
+  return null
+}
+
+function updateSoftwareDim(monitorId, level) {
+  level = Math.max(0, Math.min(100, level))
+  softwareDimLevels[monitorId] = level
+
+  if (isWindowsUserIdle) return
+
+  if (level === 0) {
+    if (softwareDimOverlays[monitorId] && !softwareDimOverlays[monitorId].isDestroyed()) {
+      softwareDimOverlays[monitorId].hide()
+    }
+    return
+  }
+
+  const bounds = getSoftwareDimDisplayBounds(monitorId)
+  if (!bounds) return
+
+  if (!softwareDimOverlays[monitorId] || softwareDimOverlays[monitorId].isDestroyed()) {
+    const win = new BrowserWindow({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      frame: false,
+      backgroundColor: '#000000',
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      focusable: false,
+      hasShadow: false,
+      show: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        devTools: false
+      }
+    })
+    win.setIgnoreMouseEvents(true)
+    win.setAlwaysOnTop(true, 'screen-saver')
+    win.setOpacity(level / 100)
+    win.showInactive()
+    win.loadURL('data:text/html,<body style="background:#000;margin:0"></body>')
+    softwareDimOverlays[monitorId] = win
+  } else {
+    softwareDimOverlays[monitorId].setBounds(bounds)
+    softwareDimOverlays[monitorId].setOpacity(level / 100)
+    if (!softwareDimOverlays[monitorId].isVisible()) {
+      softwareDimOverlays[monitorId].showInactive()
+    }
+  }
+}
+
+function hideSoftwareDimOverlays() {
+  for (const id in softwareDimOverlays) {
+    if (!softwareDimOverlays[id].isDestroyed()) {
+      softwareDimOverlays[id].hide()
+    }
+  }
+}
+
+function showSoftwareDimOverlays() {
+  for (const id in softwareDimLevels) {
+    if (softwareDimLevels[id] > 0) {
+      updateSoftwareDim(id, softwareDimLevels[id])
+    }
+  }
+}
+
 ipcMain.on('send-settings', (event, data) => {
   console.log("Recieved new settings", data.newSettings)
   writeSettings(data.newSettings, true, data.sendUpdate)
@@ -2238,7 +2328,7 @@ function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, 
 }
 
 let currentTransition = null
-function transitionBrightness(level, eventMonitors = [], stepSpeed = 1) {
+function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}) {
   if (currentTransition !== null) clearInterval(currentTransition);
 
   // Slow down transition
@@ -2288,20 +2378,30 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1) {
       if (numDone === Object.keys(monitors).length) {
         clearInterval(currentTransition);
         currentTransition = null
+        // Apply software dim once transition reaches the target
+        for (let k in monitors) {
+          let dimLevel = softwareDimLevel
+          if (settings.adjustmentTimeIndividualDisplays) {
+            dimLevel = (eventMonitorsSoftwareDim[monitors[k].id] >= 0 ? eventMonitorsSoftwareDim[monitors[k].id] : softwareDimLevel)
+          }
+          updateSoftwareDim(monitors[k].id, dimLevel)
+        }
       }
     }
   }, settings.updateInterval * transitionIntervalMult)
 }
 
-function transitionlessBrightness(level, eventMonitors = []) {
+function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}) {
   for (let key in monitors) {
     const monitor = monitors[key]
     let normalized = level
+    let dimLevel = softwareDimLevel
     if (settings.adjustmentTimeIndividualDisplays) {
-      // If using individual monitor settings
       normalized = (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
+      dimLevel = (eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel)
     }
     updateBrightness(monitor.id, normalized)
+    updateSoftwareDim(monitor.id, dimLevel)
     sendToAllWindows('monitors-updated', monitors)
   }
 }
@@ -2407,6 +2507,10 @@ ipcMain.on('update-brightness', function (event, data) {
   if (hotkeyOverlayTimeout) {
     hotkeyOverlayStart()
   }
+})
+
+ipcMain.on('update-software-dim', (event, { monitorId, level }) => {
+  updateSoftwareDim(monitorId, level)
 })
 
 ipcMain.on('request-monitors', function (event, arg) {
@@ -2670,6 +2774,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
         // Idle
         if(!isWindowsUserIdle) {
           console.log("Displays have gone to sleep.")
+          hideSoftwareDimOverlays()
 
           // If we were about to do a hardware event, stop.
           if (handleChangeTimeout1) clearTimeout(handleChangeTimeout1);
@@ -2684,6 +2789,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
           console.log("Displays have woken up.")
           recentlyWokeUp = true
           handleMetricsChange("GUID_SESSION_USER_PRESENCE")
+          setTimeout(showSoftwareDimOverlays, 500)
           setTimeout(() => {
             recentlyWokeUp = false
           },
@@ -4200,18 +4306,27 @@ function idleCheckShort() {
       idleMonitorBlock?.release?.()
       idleMonitorBlock = blockBadDisplays("idle:start")
       try {
+        const idleBrightness = settings.detectIdleBrightness ?? 0
+        const idleSoftwareDim = settings.detectIdleSoftwareDim ?? 0
         const transitionMonitors = {}
         Object.values(monitors)?.forEach((monitor) => {
           if(!shouldSkipDisplay(monitor, true)) {
             if(settings.idleTransitionSpeed) {
-              transitionMonitors[monitor.id] = 0
+              transitionMonitors[monitor.id] = idleBrightness
             } else {
-              updateBrightness(monitor.id, 0, true, "brightness")
+              updateBrightness(monitor.id, idleBrightness, true, "brightness")
             }
           }
         })
         if(Object.keys(transitionMonitors).length) {
-          transitionBrightness(0, transitionMonitors, settings.idleTransitionSpeed)
+          transitionBrightness(idleBrightness, transitionMonitors, settings.idleTransitionSpeed)
+        }
+        if (idleSoftwareDim > 0) {
+          Object.values(monitors).forEach((monitor) => {
+            if (!shouldSkipDisplay(monitor, true)) {
+              updateSoftwareDim(monitor.id, idleSoftwareDim)
+            }
+          })
         }
       } catch (e) {
         console.log(`Error dimming displays`, e)
@@ -4223,6 +4338,11 @@ function idleCheckShort() {
       console.log(`\x1b[36mUser no longer idle after ${lastIdleTime} seconds.\x1b[0m`)
       clearInterval(notIdleMonitor)
       notIdleMonitor = false
+
+      // Clear idle software dim
+      if (settings.detectIdleSoftwareDim > 0) {
+        Object.values(monitors).forEach((monitor) => updateSoftwareDim(monitor.id, 0))
+      }
 
       // Different behavior depending on if idle dimming is on
       if (settings.detectIdleTimeEnabled) {
@@ -4424,6 +4544,7 @@ function getCurrentAdjustmentEvent() {
         if (foundEvent === false || foundEvent.value <= eventValue) {
           foundEvent = Object.assign({}, event)
           foundEvent.monitors = Object.assign({}, event.monitors)
+          foundEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
           foundEvent.value = eventValue
         }
       }
@@ -4451,6 +4572,7 @@ function getNextAdjustmentEvent() {
       if (eventValue > currentEvent.value && (!closestEvent || eventValue < closestEvent.value)) {
         closestEvent = Object.assign({}, event)
         closestEvent.monitors = Object.assign({}, event.monitors)
+        closestEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
         closestEvent.value = eventValue
       }
 
@@ -4458,6 +4580,7 @@ function getNextAdjustmentEvent() {
       if (!earliestEvent || eventValue < earliestEvent.value) {
         earliestEvent = Object.assign({}, event)
         earliestEvent.monitors = Object.assign({}, event.monitors)
+        earliestEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
         earliestEvent.value = eventValue
       }
     }
@@ -4562,10 +4685,12 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
         lastTimeEvent.day = new Date().getDate()
 
         refreshMonitors().then(() => {
+          const eventSoftwareDim = foundEvent.softwareDim ?? 0
+          const eventMonitorsSoftwareDim = foundEvent.monitorsSoftwareDim ?? {}
           if (instant || settings.adjustmentTimeSpeed === "instant") {
-            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}))
+            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), eventSoftwareDim, eventMonitorsSoftwareDim)
           } else {
-            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}))
+            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), 1, eventSoftwareDim, eventMonitorsSoftwareDim)
           }
         })
         return foundEvent
