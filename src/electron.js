@@ -2394,7 +2394,7 @@ function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, 
 }
 
 let currentTransition = null
-function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500) {
+function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}) {
   if (currentTransition !== null) clearInterval(currentTransition);
 
   // Slow down transition
@@ -2451,25 +2451,33 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
             dimLevel = (eventMonitorsSoftwareDim[monitors[k].id] >= 0 ? eventMonitorsSoftwareDim[monitors[k].id] : softwareDimLevel)
           }
           updateSoftwareDim(monitors[k].id, dimLevel)
-          updateWarmth(monitors[k].id, warmthKelvin)
+          let kelvin = warmthKelvin
+          if (settings.adjustmentTimeIndividualDisplays && eventMonitorsKelvin[monitors[k].id] != null) {
+            kelvin = eventMonitorsKelvin[monitors[k].id]
+          }
+          updateWarmth(monitors[k].id, kelvin)
         }
       }
     }
   }, settings.updateInterval * transitionIntervalMult)
 }
 
-function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500) {
+function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}) {
   for (let key in monitors) {
     const monitor = monitors[key]
     let normalized = level
     let dimLevel = softwareDimLevel
+    let kelvin = warmthKelvin
     if (settings.adjustmentTimeIndividualDisplays) {
       normalized = (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
       dimLevel = (eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel)
+      if (eventMonitorsKelvin[monitor.id] != null) {
+        kelvin = eventMonitorsKelvin[monitor.id]
+      }
     }
     updateBrightness(monitor.id, normalized)
     updateSoftwareDim(monitor.id, dimLevel)
-    updateWarmth(monitor.id, warmthKelvin)
+    updateWarmth(monitor.id, kelvin)
     sendToAllWindows('monitors-updated', monitors)
   }
 }
@@ -4703,6 +4711,7 @@ function getCurrentAdjustmentEvent() {
           foundEvent = Object.assign({}, event)
           foundEvent.monitors = Object.assign({}, event.monitors)
           foundEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
+          foundEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
           foundEvent.value = eventValue
         }
       }
@@ -4731,6 +4740,7 @@ function getNextAdjustmentEvent() {
         closestEvent = Object.assign({}, event)
         closestEvent.monitors = Object.assign({}, event.monitors)
         closestEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
+        closestEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
         closestEvent.value = eventValue
       }
 
@@ -4739,6 +4749,7 @@ function getNextAdjustmentEvent() {
         earliestEvent = Object.assign({}, event)
         earliestEvent.monitors = Object.assign({}, event.monitors)
         earliestEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
+        earliestEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
         earliestEvent.value = eventValue
       }
     }
@@ -4846,10 +4857,11 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           const eventSoftwareDim = foundEvent.softwareDim ?? 0
           const eventMonitorsSoftwareDim = foundEvent.monitorsSoftwareDim ?? {}
           const eventKelvin = foundEvent.kelvin ?? 6500
+          const eventMonitorsKelvin = foundEvent.monitorsKelvin ?? {}
           if (instant || settings.adjustmentTimeSpeed === "instant") {
-            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin)
+            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin)
           } else {
-            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin)
+            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin)
           }
         })
         setTrayStatus()

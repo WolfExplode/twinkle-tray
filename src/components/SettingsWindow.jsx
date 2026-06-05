@@ -716,13 +716,31 @@ export default class SettingsWindow extends PureComponent {
                         softwareDim = this.state.adjustmentTimes[index].monitorsSoftwareDim[monitor.id]
                     }
                     const level = this.getAdjustmentLevel(brightness, softwareDim)
-                    return (<Slider key={monitor.id + ".brightness"} min={softwareDimMin} max={100} name={getMonitorName(monitor, this.state.names)} onChange={(value) => { this.getAdjustmentTimesMonitorsChanged(index, monitor, value) }} level={level} scrolling={false} />)
+
+                    let kelvin = time.kelvin ?? 6500
+                    if (this.state.adjustmentTimes[index]?.monitorsKelvin && this.state.adjustmentTimes[index].monitorsKelvin[monitor.id] != null) {
+                        kelvin = this.state.adjustmentTimes[index].monitorsKelvin[monitor.id]
+                    } else {
+                        if (this.state.adjustmentTimes[index].monitorsKelvin === undefined) {
+                            this.state.adjustmentTimes[index].monitorsKelvin = {}
+                        }
+                        this.state.adjustmentTimes[index].monitorsKelvin[monitor.id] = kelvin
+                        this.adjustmentTimesUpdated()
+                    }
+
+                    return (
+                        <React.Fragment key={monitor.id}>
+                            <Slider key={monitor.id + ".brightness"} min={softwareDimMin} max={100} name={getMonitorName(monitor, this.state.names)} onChange={(value) => { this.getAdjustmentTimesMonitorsChanged(index, monitor, value) }} level={level} scrolling={false} />
+                            {tempEnabled ? (
+                                <Slider key={monitor.id + ".kelvin"} name={`${getMonitorName(monitor, this.state.names)} (K)`} min={1000} max={6500} level={kelvin} onChange={(value) => { this.getAdjustmentTimesKelvinChanged(index, monitor, value) }} scrolling={false} />
+                            ) : null}
+                        </React.Fragment>
+                    )
                 }
             })
             return (
                 <>
                     {monitorSliders}
-                    {kelvinSlider}
                 </>
             )
         } else {
@@ -753,6 +771,15 @@ export default class SettingsWindow extends PureComponent {
         this.state.adjustmentTimes[index].monitors[monitor.id] = split.brightness
         this.state.adjustmentTimes[index].monitorsSoftwareDim[monitor.id] = split.softwareDim
         this.forceUpdate();
+        this.adjustmentTimesUpdated()
+    }
+
+    getAdjustmentTimesKelvinChanged = (index, monitor, kelvin) => {
+        if (this.state.adjustmentTimes[index].monitorsKelvin === undefined) {
+            this.state.adjustmentTimes[index].monitorsKelvin = {}
+        }
+        this.state.adjustmentTimes[index].monitorsKelvin[monitor.id] = kelvin
+        this.forceUpdate()
         this.adjustmentTimesUpdated()
     }
 
@@ -1160,6 +1187,7 @@ export default class SettingsWindow extends PureComponent {
             time: "12:30",
             monitors: {},
             monitorsSoftwareDim: {},
+            monitorsKelvin: {},
             useSunCalc: false,
             sunCalc: "sunrise"
         })
