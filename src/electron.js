@@ -343,6 +343,10 @@ function enableMouseEvents() {
     });
 
 
+    mouseEvents.on("mousemove", (e) => {
+      handleMonitorFocusMouseMove(e.x, e.y)
+    })
+
     // Handle edge cases where "blur" event doesn't properly fire
     mouseEvents.on("mousedown", (e) => {
       if (panelSize.visible || !canReposition) {
@@ -375,6 +379,8 @@ function pauseMouseEvents(paused) {
 
   // Clear timeout if set
   if (willPauseMouseEventsTimeout) clearTimeout(willPauseMouseEventsTimeout);
+
+  if (paused && settings.monitorFocusEnabled) return false;
 
   if (paused) {
     if (mouseEvents && !mouseEvents.getPaused()) {
@@ -508,6 +514,9 @@ const defaultSettings = {
   detectIdleTimeMinutes: 5,
   detectIdleCheckFullscreen: false,
   detectIdleMedia: false,
+  monitorFocusEnabled: false,
+  monitorFocusMinutes: 10,
+  monitorFocusDimLevel: 0,
   idleRestoreSeconds: 0,
   wakeRestoreSeconds: 0,
   hardwareRestoreSeconds: 0,
@@ -851,6 +860,15 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.detectIdleTimeEnabled === true || newSettings.detectIdleTimeEnabled === false) {
       rebuildTray = true
+    }
+
+    if (newSettings.monitorFocusEnabled !== undefined) {
+      if (settings.monitorFocusEnabled) {
+        startMonitorFocusTracking()
+      } else {
+        stopMonitorFocusTracking()
+        resetMonitorFocusState()
+      }
     }
 
     if (newSettings.windowsStyle !== undefined) {
@@ -3278,6 +3296,9 @@ app.on("ready", async () => {
     }, 30000) // 30 seconds grace period
   
     setTimeout(addEventListeners, 5000)
+    setTimeout(() => {
+      if (settings.monitorFocusEnabled) startMonitorFocusTracking()
+    }, 6000)
   })
 
 })
@@ -3971,6 +3992,11 @@ function handleMonitorChange(t, e, d) {
     }
     handleBackgroundUpdate(true) // Apply Time Of Day Adjustments
 
+    if (settings.monitorFocusEnabled) {
+      resetMonitorFocusState()
+      startMonitorFocusTracking()
+    }
+
     // If displays not shown, refresh mainWindow
     if(settings.reloadFlyout && !panelSize.visible) {
       restartPanel(false)
@@ -4240,6 +4266,142 @@ function idleCheckShort() {
   } catch (e) {
     console.log('Error in idleCheckShort', e)
   }
+}
+
+
+// Per-monitor inactive dimming
+let monitorFocusInterval = null
+let monitorLastVisited = {}
+let monitorPreDimBrightness = {}
+let monitorFocusDimmed = new Set()
+let electronToMonitorMap = {}
+
+function buildElectronMonitorMap() {
+  electronToMonitorMap = {}
+  const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
+  const trayMonitors = Object.values(monitors || {})
+    .filter(m => m.bounds?.position !== undefined)
+    .sort((a, b) => a.bounds.position.x - b.bounds.position.x || a.bounds.position.y - b.bounds.position.y)
+  displays.forEach((d, i) => {
+    if (trayMonitors[i]) {
+      electronToMonitorMap[d.id] = trayMonitors[i].id
+    }
+  })
+  console.log(`\x1b[36mBuilt monitor focus map: ${JSON.stringify(electronToMonitorMap)}\x1b[0m`)
+}
+
+function getActiveMonitorFromPoint(x, y) {
+  const displays = screen.getAllDisplays()
+  const activeDisplay = displays.find(d =>
+    x >= d.bounds.x && x < d.bounds.x + d.bounds.width &&
+    y >= d.bounds.y && y < d.bounds.y + d.bounds.height
+  )
+  if (!activeDisplay) return null
+  const monitorId = electronToMonitorMap[activeDisplay.id]
+  if (!monitorId) return null
+  return Object.values(monitors).find(m => m.id === monitorId) || null
+}
+
+function getActiveMonitorFromCursor() {
+  const cursorPoint = screen.getCursorScreenPoint()
+  return getActiveMonitorFromPoint(cursorPoint.x, cursorPoint.y)
+}
+
+function restoreMonitorFocusBrightness(monitor) {
+  if (!monitor || !monitorFocusDimmed.has(monitor.id)) return false
+  const savedLevel = monitorPreDimBrightness[monitor.id]
+  if (savedLevel !== undefined) {
+    updateBrightness(monitor.id, savedLevel, true, "brightness")
+    console.log(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
+  }
+  monitorFocusDimmed.delete(monitor.id)
+  delete monitorPreDimBrightness[monitor.id]
+  return true
+}
+
+let lastMonitorFocusMove = 0
+function handleMonitorFocusMouseMove(x, y) {
+  if (!settings.monitorFocusEnabled || !monitors || userIdleDimmed || isWindowsUserIdle) return
+  if (tempSettings.pauseIdleDetection) return
+
+  const activeMonitor = getActiveMonitorFromPoint(x, y)
+  if (!activeMonitor) return
+
+  const now = Date.now()
+
+  if (monitorFocusDimmed.has(activeMonitor.id)) {
+    restoreMonitorFocusBrightness(activeMonitor)
+    monitorLastVisited[activeMonitor.id] = now
+    return
+  }
+
+  if (now - lastMonitorFocusMove < 250) return
+  lastMonitorFocusMove = now
+  monitorLastVisited[activeMonitor.id] = now
+}
+
+function checkMonitorFocus() {
+  if (!monitors || userIdleDimmed || isWindowsUserIdle) return
+  if (tempSettings.pauseIdleDetection) return
+
+  const activeMonitor = getActiveMonitorFromCursor()
+  const now = Date.now()
+  const timeout = settings.monitorFocusMinutes * 60 * 1000
+
+  if (activeMonitor) {
+    monitorLastVisited[activeMonitor.id] = now
+    restoreMonitorFocusBrightness(activeMonitor)
+  }
+
+  for (const monitor of Object.values(monitors)) {
+    if (!monitor.id || shouldSkipDisplay(monitor, true)) continue
+    if (monitorFocusDimmed.has(monitor.id)) continue
+    if (activeMonitor && monitor.id === activeMonitor.id) continue
+
+    const lastVisited = monitorLastVisited[monitor.id] || 0
+    if (now - lastVisited >= timeout) {
+      monitorPreDimBrightness[monitor.id] = monitor.brightness
+      monitorFocusDimmed.add(monitor.id)
+      updateBrightness(monitor.id, settings.monitorFocusDimLevel, true, "brightness")
+      console.log(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
+    }
+  }
+}
+
+function startMonitorFocusTracking() {
+  stopMonitorFocusTracking()
+  const now = Date.now()
+  for (const monitor of Object.values(monitors || {})) {
+    if (!monitorLastVisited[monitor.id]) {
+      monitorLastVisited[monitor.id] = now
+    }
+  }
+  buildElectronMonitorMap()
+  enableMouseEvents()
+  pauseMouseEvents(false)
+  monitorFocusInterval = setInterval(checkMonitorFocus, 10000)
+  console.log(`\x1b[36mStarted monitor focus tracking.\x1b[0m`)
+}
+
+function stopMonitorFocusTracking() {
+  if (monitorFocusInterval) {
+    clearInterval(monitorFocusInterval)
+    monitorFocusInterval = null
+  }
+}
+
+function resetMonitorFocusState() {
+  for (const monitorId of monitorFocusDimmed) {
+    const monitor = Object.values(monitors || {}).find(m => m.id === monitorId)
+    const savedLevel = monitorPreDimBrightness[monitorId]
+    if (monitor && savedLevel !== undefined) {
+      updateBrightness(monitorId, savedLevel, true, "brightness")
+    }
+  }
+  monitorLastVisited = {}
+  monitorPreDimBrightness = {}
+  monitorFocusDimmed = new Set()
+  electronToMonitorMap = {}
 }
 
 

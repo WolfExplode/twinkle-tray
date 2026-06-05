@@ -1324,6 +1324,23 @@ export default class SettingsWindow extends PureComponent {
                                     <SettingsOption title={T.t("SETTINGS_TIME_IDLE_FS_TITLE")} description={T.t("SETTINGS_TIME_IDLE_FS_DESC")} input={this.renderToggle("detectIdleCheckFullscreen")} />
                                     <SettingsOption title={T.t("SETTINGS_TIME_IDLE_MEDIA_TITLE")} description={T.t("SETTINGS_TIME_IDLE_MEDIA_DESC")} input={this.renderToggle("detectIdleMedia")} />
                                 </div>
+                                <div className="pageSection">
+                                    <div className="sectionTitle">{T.t("SETTINGS_TIME_MONITOR_FOCUS_TITLE")}</div>
+                                    <SettingsOption title={T.t("SETTINGS_TIME_MONITOR_FOCUS_TITLE")} description={T.t("SETTINGS_TIME_MONITOR_FOCUS_DESC")} input={this.renderToggle("monitorFocusEnabled")}>
+                                        <SettingsChild content={
+                                            <div style={{ "display": "flex", "gap": "16px" }}>
+                                                <div>
+                                                    <label style={{ "textTransform": "capitalize" }}>{T.t("GENERIC_MINUTES")}</label>
+                                                    <input type="number" min="1" max="600" value={window.settings.monitorFocusMinutes * 1} onChange={(e) => this.setSetting("monitorFocusMinutes", e.target.value)} />
+                                                </div>
+                                                <div>
+                                                    <label>{T.t("SETTINGS_TIME_MONITOR_FOCUS_DIM_LEVEL")}</label>
+                                                    <input type="number" min="0" max="100" value={window.settings.monitorFocusDimLevel * 1} onChange={(e) => this.setSetting("monitorFocusDimLevel", e.target.value)} />
+                                                </div>
+                                            </div>
+                                        } />
+                                    </SettingsOption>
+                                </div>
                             </SettingsPage>
 
 
