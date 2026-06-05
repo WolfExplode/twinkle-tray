@@ -699,7 +699,7 @@ export default class SettingsWindow extends PureComponent {
             }} scrolling={false} />
         ) : null
 
-        if (this.state.adjustmentTimeIndividualDisplays) {
+        if (this.state.rawSettings?.adjustmentTimeIndividualDisplays) {
             const monitorSliders = Object.values(this.state.monitors).map((monitor, idx) => {
                 if (monitor.type == "none") {
                     return (<div key={monitor.id + ".brightness"}></div>)
@@ -719,7 +719,12 @@ export default class SettingsWindow extends PureComponent {
                     return (<Slider key={monitor.id + ".brightness"} min={softwareDimMin} max={100} name={getMonitorName(monitor, this.state.names)} onChange={(value) => { this.getAdjustmentTimesMonitorsChanged(index, monitor, value) }} level={level} scrolling={false} />)
                 }
             })
-            return [...monitorSliders, kelvinSlider]
+            return (
+                <>
+                    {monitorSliders}
+                    {kelvinSlider}
+                </>
+            )
         } else {
             const level = this.getAdjustmentLevel(time.brightness, time.softwareDim)
             return (
@@ -1319,6 +1324,7 @@ export default class SettingsWindow extends PureComponent {
                                     <div className="sectionTitle">{T.t("SETTINGS_TIME_TITLE")}</div>
                                     <p>{T.t("SETTINGS_TIME_DESC")}</p>
                                     <SettingsOption title="Color Temperature" description="When enabled, each time adjustment can set a warm tint on your displays (6500K = daylight, 1000K = candlelight)." input={this.renderToggle("adjustmentTimeTemperatureEnabled")} />
+                                    <SettingsOption title={T.t("SETTINGS_TIME_INDIVIDUAL_TITLE")} description={T.t("SETTINGS_TIME_INDIVIDUAL_DESC")} input={this.renderToggle("adjustmentTimeIndividualDisplays")} />
                                     <div className="adjustmentTimes">
                                         {this.getAdjustmentTimes()}
                                     </div>
@@ -1341,7 +1347,6 @@ export default class SettingsWindow extends PureComponent {
                                             </div>
                                         </SettingsChild>
                                     </SettingsOption>
-                                    <SettingsOption title={T.t("SETTINGS_TIME_INDIVIDUAL_TITLE")} description={T.t("SETTINGS_TIME_INDIVIDUAL_DESC")} input={this.renderToggle("adjustmentTimeIndividualDisplays")} />
                                     <SettingsOption title={T.t("SETTINGS_TIME_ANIMATE_TITLE")} description={T.t("SETTINGS_TIME_ANIMATE_DESC")} input={this.renderToggle("adjustmentTimeAnimate")} />
                                     <SettingsOption title={T.t("SETTINGS_TIME_TRANSITON_TITLE")} description={T.t("SETTINGS_TIME_TRANSITON_DESC")} input={
                                         <select value={window.settings.adjustmentTimeSpeed} onChange={(e) => this.setSetting("adjustmentTimeSpeed", e.target.value)}>

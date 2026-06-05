@@ -336,16 +336,12 @@ label {
 .adjustmentTimes {
     padding-top: 5px;
 
-    .item {
-        padding-top: 20px;
-        margin-top: 20px;
-        border-top: 1px solid var(--page-text-mid);
+    .settings-option-elem {
+        margin-top: 15px;
+    }
 
-        .monitor-item {
-            max-width: 320px;
-        }
-
-        &+.item {}
+    .monitor-item {
+        max-width: 320px;
     }
 
     .monitor-item .input--range .val {
