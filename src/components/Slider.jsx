@@ -1,13 +1,44 @@
 import React from "react";
-import { useEffect, Component } from "react"
+import { Component } from "react"
 import PropTypes from 'prop-types';
 
 export default class Slider extends Component {
 
     firingEvent = false
-    handleChange = (event) => {
-        if(event.target.value !== this.props.level)
-        this.setState({ level: this.cap(event.target.value) }, this.fireChange)
+
+    handleRangeChange = (event) => {
+        const val = this.cap(event.target.value)
+        if (val !== this.props.level) {
+            this.setState({ level: val }, this.fireChange)
+        }
+    }
+
+    handleNumberFocus = () => {
+        const level = this.cap(this.props.level)
+        this.setState({ editing: true, inputValue: String(Math.floor(level)) })
+    }
+
+    handleNumberChange = (event) => {
+        this.setState({ inputValue: event.target.value })
+    }
+
+    handleNumberBlur = () => {
+        this.commitNumberInput()
+    }
+
+    handleNumberKeyDown = (event) => {
+        if (event.key === 'Enter') {
+            event.target.blur()
+        }
+    }
+
+    commitNumberInput = () => {
+        const raw = this.state.inputValue
+        const parsed = (raw === '' || raw === '-') ? NaN : (raw * 1)
+        const level = isNaN(parsed) ? this.cap(this.props.level) : this.cap(parsed)
+        this.setState({ editing: false, inputValue: '', level }, () => {
+            if (level !== this.props.level) this.fireChange()
+        })
     }
 
     handleWheel = (event) => {
@@ -39,9 +70,10 @@ export default class Slider extends Component {
         const min = (this.props.min || 0) * 1
         const max = (this.props.max || 100) * 1
         let capped = level * 1
-        if (level < min) {
+        if (isNaN(capped)) capped = min
+        if (capped < min) {
             capped = min
-        } else if (level > max) {
+        } else if (capped > max) {
             capped = max
         }
         return capped
@@ -82,15 +114,17 @@ export default class Slider extends Component {
         super(props);
         this.state = {
             level: this.cap((this.props.level === undefined ? 50 : this.props.level)),
+            editing: false,
+            inputValue: '',
         }
-        //this.fireChange()
     }
 
     componentDidUpdate(oldProps) {
-        if (oldProps.max != this.props.max || oldProps.min != this.props.min) {
+        if (this.state.editing) return
+        if (oldProps.max != this.props.max || oldProps.min != this.props.min || oldProps.level != this.props.level) {
             this.setState({
                 level: this.cap(this.props.level)
-            }, this.fireChange())
+            })
         }
     }
 
@@ -101,12 +135,13 @@ export default class Slider extends Component {
         const hasSoftwareDim = min < 0
         const totalRange = max - min
         const zeroMarkPos = hasSoftwareDim ? ((-min) / totalRange * 100) + '%' : null
+        const displayValue = this.state.editing ? this.state.inputValue : Math.floor(level)
         return (
             <div className="monitor-item" onWheel={this.handleWheel}>
                 {this.getName()}
                 <div className="input--range" data-height={this.props.height} data-software-dim={hasSoftwareDim && level < 0 ? "active" : undefined}>
                     <div className="rangeGroup">
-                        <input type="range" min={min} max={max} value={level} data-percent={level + "%"} onChange={this.handleChange} className="range" />
+                        <input type="range" min={min} max={max} value={level} data-percent={level + "%"} onChange={this.handleRangeChange} className="range" />
                         {hasSoftwareDim ? (
                             <>
                                 <div className="progress progress-software-dim" style={this.softwareDimProgressStyle()}></div>
@@ -117,7 +152,17 @@ export default class Slider extends Component {
                             <div className="progress" style={this.progressStyle()}></div>
                         )}
                     </div>
-                    <input type="number" min={min} max={max} value={Math.floor(level)} onChange={this.handleChange} className="val" />
+                    <input
+                        type="number"
+                        min={min}
+                        max={max}
+                        value={displayValue}
+                        onChange={this.handleNumberChange}
+                        onFocus={this.handleNumberFocus}
+                        onBlur={this.handleNumberBlur}
+                        onKeyDown={this.handleNumberKeyDown}
+                        className="val"
+                    />
                 </div>
             </div>
         );
