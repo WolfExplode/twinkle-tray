@@ -439,7 +439,6 @@ function pingAnalytics() {
 let monitors = {}
 let mainWindow;
 let tray = null
-let tempTray = null
 let lastTheme = false
 
 const panelSize = {
@@ -3569,7 +3568,6 @@ app.on('quit', () => {
   } catch (e) {}
   try {
     tray.destroy()
-    tempTray?.destroy?.()
   } catch (e) {
 
   }
@@ -3611,7 +3609,6 @@ function createTray() {
     }
   })
 
-  createTempTray()
   setTrayStatus()
 }
 
@@ -3620,9 +3617,7 @@ async function recreateTray() {
   if(recreatingTray) return;
   recreatingTray = true
   tray?.destroy?.()
-  tempTray?.destroy?.()
   tray = null
-  tempTray = null
   createTray()
   recreatingTray = false
 }
@@ -3725,30 +3720,6 @@ function getCurrentKelvin() {
   return 6500
 }
 
-function getTempTrayIcon(enabled) {
-  const { nativeImage } = require('electron')
-  const fill = enabled ? '#FF8C00' : '#888888'
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="${fill}" stroke="#222" stroke-width="0.5"/></svg>`
-  return nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`)
-}
-
-function createTempTray() {
-  if (tempTray != null) return
-  const { Tray } = require('electron')
-  tempTray = new Tray(getTempTrayIcon(settings.adjustmentTimeTemperatureEnabled))
-  updateTempTray()
-  tempTray.on('click', () => toggleColorTemperature(true))
-}
-
-function updateTempTray() {
-  if (!tempTray) return
-  tempTray.setImage(getTempTrayIcon(settings.adjustmentTimeTemperatureEnabled))
-  const kelvin = getCurrentKelvin()
-  let tip = T.t("PANEL_LABEL_COLOR_TEMPERATURE") + ': ' + (settings.adjustmentTimeTemperatureEnabled ? T.t("GENERIC_ON") : T.t("GENERIC_OFF"))
-  if (settings.adjustmentTimeTemperatureEnabled && kelvin < 6500) tip += ` (${kelvin}K)`
-  tempTray.setToolTip(tip)
-}
-
 function toggleColorTemperature(openPanel = false) {
   const enabling = !settings.adjustmentTimeTemperatureEnabled
   writeSettings({ adjustmentTimeTemperatureEnabled: enabling }, true, true)
@@ -3779,7 +3750,6 @@ function setTrayStatus() {
       }
       tray.setToolTip(tooltip)
     }
-    updateTempTray()
   } catch (e) {
     console.log(e)
   }
@@ -4343,7 +4313,6 @@ powerMonitor.on("resume", () => {
   if(settings.restartOnWake) {
   // Screw it, just restart the whole app.
     tray.destroy()
-    tempTray?.destroy?.()
     app.relaunch()
     app.exit()
   }

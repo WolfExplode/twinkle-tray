@@ -2,14 +2,23 @@
 
 const { getWhitePointForKelvin } = require("./color-temperature")
 
-const HIGHLIGHT_KNEE = 0.6
-const HIGHLIGHT_STRENGTH = 1.0
+// Knee and compression strength are in linear sRGB
+const HIGHLIGHT_KNEE = 0.25
+const HIGHLIGHT_COMPRESSION_STRENGTH = 1.5
 
-function highlightCurve(x, knee = HIGHLIGHT_KNEE, strength = HIGHLIGHT_STRENGTH) {
+function srgbToLinear(c) {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+}
+
+function linearToSrgb(c) {
+  c = Math.max(0, Math.min(1, c))
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055
+}
+
+function highlightCurve(x, knee = HIGHLIGHT_KNEE, compressionStrength = HIGHLIGHT_COMPRESSION_STRENGTH) {
   if (x <= knee) return x
   const t = (x - knee) / (1 - knee)
-  const compressed = knee + (1 - knee) * (t / (1 + strength * t))
-  return compressed
+  return knee + (1 - knee) * (t / (1 + compressionStrength * t))
 }
 
 function buildGammaRamp({ kelvin = 6500, highlightWeight = 0 } = {}) {
@@ -18,10 +27,12 @@ function buildGammaRamp({ kelvin = 6500, highlightWeight = 0 } = {}) {
   const ramp = new Uint16Array(256 * 3)
 
   for (let i = 0; i < 256; i++) {
-    const x = i / 255
-    const compressed = highlightCurve(x)
-    const y = x * (1 - weight) + compressed * weight
-    const v = Math.min(65535, Math.round(y * 65535))
+    const encoded = i / 255
+    const linear = srgbToLinear(encoded)
+    const compressedLinear = highlightCurve(linear)
+    const blendedLinear = linear * (1 - weight) + compressedLinear * weight
+    const outEncoded = linearToSrgb(blendedLinear)
+    const v = Math.min(65535, Math.round(outEncoded * 65535))
     ramp[i] = Math.min(65535, Math.round(v * r))
     ramp[i + 256] = Math.min(65535, Math.round(v * g))
     ramp[i + 512] = Math.min(65535, Math.round(v * b))
