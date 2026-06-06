@@ -2394,7 +2394,7 @@ function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, 
 }
 
 let currentTransition = null
-function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}) {
+function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, onlyMonitorIds = null) {
   if (currentTransition !== null) clearInterval(currentTransition);
 
   // Slow down transition
@@ -2414,16 +2414,20 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
   }
 
   const step = (stepSpeed * stepSpeedMult)
+  const usePerMonitorTargets = settings.adjustmentTimeIndividualDisplays || onlyMonitorIds
+  const targetMonitorCount = onlyMonitorIds
+    ? onlyMonitorIds.length
+    : Object.keys(monitors).length
 
   currentTransition = setInterval(() => {
     if (recentlyWokeUp || isWindowsUserIdle) clearInterval(currentTransition);
     let numDone = 0
     for (let key in monitors) {
       const monitor = monitors[key]
+      if (onlyMonitorIds && !onlyMonitorIds.includes(monitor.id)) continue
 
       let normalized = level * 1
-      if (settings.adjustmentTimeIndividualDisplays) {
-        // If using individual monitor settings
+      if (usePerMonitorTargets) {
         normalized = (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
       }
 
@@ -2441,18 +2445,19 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
         updateBrightness(monitor.id, (monitor.brightness < normalized ? monitor.brightness + step : monitor.brightness - step), undefined, undefined, false)
       }
       sendToAllWindows('monitors-updated', monitors)
-      if (numDone === Object.keys(monitors).length) {
+      if (numDone === targetMonitorCount) {
         clearInterval(currentTransition);
         currentTransition = null
         // Apply software dim and warmth once transition reaches the target
         for (let k in monitors) {
+          if (onlyMonitorIds && !onlyMonitorIds.includes(monitors[k].id)) continue
           let dimLevel = softwareDimLevel
-          if (settings.adjustmentTimeIndividualDisplays) {
+          if (usePerMonitorTargets) {
             dimLevel = (eventMonitorsSoftwareDim[monitors[k].id] >= 0 ? eventMonitorsSoftwareDim[monitors[k].id] : softwareDimLevel)
           }
           updateSoftwareDim(monitors[k].id, dimLevel)
           let kelvin = warmthKelvin
-          if (settings.adjustmentTimeIndividualDisplays && eventMonitorsKelvin[monitors[k].id] != null) {
+          if (usePerMonitorTargets && eventMonitorsKelvin[monitors[k].id] != null) {
             kelvin = eventMonitorsKelvin[monitors[k].id]
           }
           updateWarmth(monitors[k].id, kelvin)
@@ -4590,14 +4595,34 @@ function getActiveMonitorFromCursor() {
   return getActiveMonitorFromPoint(cursorPoint.x, cursorPoint.y)
 }
 
+function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDim = 0) {
+  if (settings.adjustmentTimeSpeed === "instant") {
+    updateBrightness(monitor.id, targetBrightness, true, "brightness")
+    updateSoftwareDim(monitor.id, targetSoftwareDim)
+    return
+  }
+  if (targetSoftwareDim === 0) updateSoftwareDim(monitor.id, 0)
+  transitionBrightness(
+    targetBrightness,
+    { [monitor.id]: targetBrightness },
+    1,
+    targetSoftwareDim,
+    { [monitor.id]: targetSoftwareDim },
+    6500,
+    {},
+    [monitor.id]
+  )
+}
+
 function restoreMonitorFocusBrightness(monitor) {
   if (!monitor || !monitorFocusDimmed.has(monitor.id)) return false
   const savedLevel = monitorPreDimBrightness[monitor.id]
   if (savedLevel !== undefined) {
-    updateBrightness(monitor.id, savedLevel, true, "brightness")
+    applyMonitorFocusTransition(monitor, savedLevel, 0)
     console.log(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
+  } else {
+    updateSoftwareDim(monitor.id, 0)
   }
-  updateSoftwareDim(monitor.id, 0)
   monitorFocusDimmed.delete(monitor.id)
   delete monitorPreDimBrightness[monitor.id]
   return true
@@ -4646,8 +4671,7 @@ function checkMonitorFocus() {
     if (now - lastVisited >= timeout) {
       monitorPreDimBrightness[monitor.id] = monitor.brightness
       monitorFocusDimmed.add(monitor.id)
-      updateBrightness(monitor.id, settings.monitorFocusDimLevel ?? 0, true, "brightness")
-      updateSoftwareDim(monitor.id, settings.monitorFocusSoftwareDim ?? 0)
+      applyMonitorFocusTransition(monitor, settings.monitorFocusDimLevel ?? 0, settings.monitorFocusSoftwareDim ?? 0)
       console.log(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
     }
   }

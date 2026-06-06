@@ -175,7 +175,7 @@
     "SETTINGS_TIME_INDIVIDUAL_TITLE": "Set brightness for individual displays",
     "SETTINGS_TIME_INDIVIDUAL_DESC": "Configure the brightness per display instead of for all displays at once.",
     "SETTINGS_TIME_TRANSITON_TITLE": "Brightness transition speed",
-    "SETTINGS_TIME_TRANSITON_DESC": "How quickly brightness should transition when time of day adjustments are activated.",
+    "SETTINGS_TIME_TRANSITON_DESC": "How quickly brightness fades when changed automatically, including time of day schedules and inactive monitor dimming.",
     "SETTINGS_TIME_STARTUP_TITLE": "Check at app startup",
     "SETTINGS_TIME_STARTUP_DESC": "Adjust the brightness to match the most relevant time when Twinkle Tray starts.",
     "SETTINGS_TIME_IDLE_TITLE": "Idle Detection",
