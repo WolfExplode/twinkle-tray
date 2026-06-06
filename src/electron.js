@@ -478,6 +478,7 @@ const defaultSettings = {
   hotkeys: [],
   hotkeyPercent: 10,
   adjustmentTimes: [],
+  adjustmentTimesActive: true,
   adjustmentTimeIndividualDisplays: false,
   adjustmentTimeSpeed: "normal",
   adjustmentTimeAnimate: false,
@@ -590,6 +591,8 @@ function readSettings(doProcessSettings = true) {
   // Overrides
   settings.isDev = isDev
   settings.killWhenIdle = false
+  if (settings.adjustmentTimesActive === undefined) settings.adjustmentTimesActive = true
+  tempSettings.pauseTimeAdjustments = !settings.adjustmentTimesActive
 
   if(!isDev && settings.showConsole && !app.commandLine.hasSwitch("console")) {
     reopenAppWithConsole()
@@ -808,9 +811,19 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       rebuildTray = true
     }
 
+    if (newSettings.adjustmentTimesActive !== undefined) {
+      tempSettings.pauseTimeAdjustments = !settings.adjustmentTimesActive
+      if (settings.adjustmentTimesActive) {
+        lastTimeEvent = false
+        applyCurrentAdjustmentEvent(true, true)
+        applyCurrentDisplayColorEffects(false)
+      }
+      setTrayMenu()
+    }
+
     if (newSettings.adjustmentTimeTemperatureEnabled !== undefined) {
-      if (settings.adjustmentTimeTemperatureEnabled) {
-        applyCurrentDisplayColorEffects()
+      if (settings.adjustmentTimeTemperatureEnabled && settings.adjustmentTimesActive) {
+        applyCurrentDisplayColorEffects(false)
       } else {
         // Scheduling disabled: restore manual values or reset to neutral
         for (const key in monitors) {
@@ -824,8 +837,8 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     }
 
     if (newSettings.adjustmentTimeHighlightCompressionEnabled !== undefined) {
-      if (settings.adjustmentTimeHighlightCompressionEnabled) {
-        applyCurrentDisplayColorEffects()
+      if (settings.adjustmentTimeHighlightCompressionEnabled && settings.adjustmentTimesActive) {
+        applyCurrentDisplayColorEffects(false)
       } else {
         // Scheduling disabled: restore manual values or reset to neutral
         for (const key in monitors) {
@@ -1867,29 +1880,40 @@ function showDisplayColorEffects() {
   }
 }
 
-function applyCurrentDisplayColorEffects() {
+function getScheduledColorForMonitor(monitor, foundEvent) {
+  const updates = {}
+  if (!foundEvent) return updates
+
+  if (settings.adjustmentTimeTemperatureEnabled) {
+    let kelvin = foundEvent.kelvin ?? 6500
+    if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsKelvin?.[monitor.id] != null) {
+      kelvin = foundEvent.monitorsKelvin[monitor.id]
+    }
+    updates.kelvin = kelvin
+  }
+
+  if (settings.adjustmentTimeHighlightCompressionEnabled) {
+    let highlight = foundEvent.highlightWeight ?? 0
+    if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsHighlightWeight?.[monitor.id] != null) {
+      highlight = foundEvent.monitorsHighlightWeight[monitor.id]
+    }
+    updates.highlightWeight = highlight
+  }
+
+  return updates
+}
+
+function applyCurrentDisplayColorEffects(overrideManual = true) {
   const foundEvent = getCurrentAdjustmentEvent()
+  if (!foundEvent) return
 
   for (let key in monitors) {
     const monitor = monitors[key]
-    const updates = {}
-
-    if (settings.adjustmentTimeTemperatureEnabled && foundEvent) {
-      let kelvin = foundEvent.kelvin ?? 6500
-      if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsKelvin?.[monitor.id] != null) {
-        kelvin = foundEvent.monitorsKelvin[monitor.id]
-      }
-      updates.kelvin = kelvin
+    const updates = getScheduledColorForMonitor(monitor, foundEvent)
+    if (!overrideManual) {
+      if (manualTemperatureActive) delete updates.kelvin
+      if (manualHighlightActive) delete updates.highlightWeight
     }
-
-    if (settings.adjustmentTimeHighlightCompressionEnabled && foundEvent) {
-      let highlight = foundEvent.highlightWeight ?? 0
-      if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsHighlightWeight?.[monitor.id] != null) {
-        highlight = foundEvent.monitorsHighlightWeight[monitor.id]
-      }
-      updates.highlightWeight = highlight
-    }
-
     if (Object.keys(updates).length) {
       updateDisplayColor(monitor.id, updates)
     }
@@ -2543,7 +2567,10 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
           if (usePerMonitorTargets && eventMonitorsHighlightWeight[monitors[k].id] != null) {
             highlight = eventMonitorsHighlightWeight[monitors[k].id]
           }
-          updateDisplayColor(monitors[k].id, { kelvin, highlightWeight: highlight })
+          const colorUpdates = {}
+          if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
+          if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
+          if (Object.keys(colorUpdates).length) updateDisplayColor(monitors[k].id, colorUpdates)
         }
       }
     }
@@ -2708,6 +2735,10 @@ ipcMain.on('toggle-highlight-compression', (event, openPanel = false) => {
   toggleHighlightCompression(openPanel)
 })
 
+ipcMain.on('toggle-time-adjustments', () => {
+  toggleTimeAdjustments()
+})
+
 ipcMain.on('request-color-toggle-state', () => {
   sendColorToggleState()
 })
@@ -2759,7 +2790,7 @@ ipcMain.on('get-update', (event, version) => {
 ipcMain.on('panel-height', (event, height) => {
   if (panelState === "overlay") return;
   panelSize.height = height + (settings?.isWin11 ? 24 : 0)
-  panelSize.width = 356 + (settings?.isWin11 ? 24 : 0)
+  panelSize.width = 392 + (settings?.isWin11 ? 24 : 0)
   if (panelSize.visible && !isAnimatingPanel) {
     repositionPanel()
   }
@@ -3708,7 +3739,12 @@ function getPausableSeparatorMenuItem() {
 
 function getTimeAdjustmentsMenuItem() {
   if (settings.adjustmentTimes?.length) {
-    return { label: T.t("GENERIC_PAUSE_TOD"), type: 'checkbox', click: (e) => tempSettings.pauseTimeAdjustments = e.checked }
+    return {
+      label: T.t("GENERIC_PAUSE_TOD"),
+      type: 'checkbox',
+      checked: !settings.adjustmentTimesActive,
+      click: (e) => writeSettings({ adjustmentTimesActive: !e.checked }, true, true)
+    }
   }
   return { label: "", visible: false }
 }
@@ -3794,6 +3830,10 @@ function sendColorToggleState() {
   sendToAllWindows('color-toggle-state', { manualTemperatureActive, manualHighlightActive })
 }
 
+function toggleTimeAdjustments() {
+  writeSettings({ adjustmentTimesActive: !settings.adjustmentTimesActive }, true, true)
+}
+
 function toggleColorTemperature(openPanel = false) {
   const turningOn = !manualTemperatureActive
   if (!turningOn) {
@@ -3812,8 +3852,10 @@ function toggleColorTemperature(openPanel = false) {
   } else {
     const foundEvent = settings.adjustmentTimeTemperatureEnabled ? getCurrentAdjustmentEvent() : null
     for (const key in monitors) {
-      const id = monitors[key].id
-      updateDisplayColor(id, { kelvin: foundEvent?.kelvin ?? 6500 })
+      const monitor = monitors[key]
+      const updates = foundEvent ? getScheduledColorForMonitor(monitor, foundEvent) : { kelvin: 6500 }
+      if (!updates.kelvin) updates.kelvin = 6500
+      updateDisplayColor(monitor.id, { kelvin: updates.kelvin })
     }
   }
   setTrayMenu()
@@ -3842,8 +3884,10 @@ function toggleHighlightCompression(openPanel = false) {
   } else {
     const foundEvent = settings.adjustmentTimeHighlightCompressionEnabled ? getCurrentAdjustmentEvent() : null
     for (const key in monitors) {
-      const id = monitors[key].id
-      updateDisplayColor(id, { highlightWeight: foundEvent?.highlightWeight ?? 0 })
+      const monitor = monitors[key]
+      const updates = foundEvent ? getScheduledColorForMonitor(monitor, foundEvent) : { highlightWeight: 0 }
+      if (updates.highlightWeight == null) updates.highlightWeight = 0
+      updateDisplayColor(monitor.id, { highlightWeight: updates.highlightWeight })
     }
   }
   setTrayMenu()
@@ -3867,7 +3911,7 @@ function setTrayStatus() {
       }
       let tooltip = 'Twinkle Tray' + (isDev ? " (Dev)" : "")
       const kelvin = getCurrentKelvin()
-      const showKelvin = settings.adjustmentTimeTemperatureEnabled && kelvin < 6500
+      const showKelvin = (manualTemperatureActive || settings.adjustmentTimeTemperatureEnabled) && kelvin < 6500
       if (i > 0) {
         averagePerc = Math.floor(averagePerc / i)
         tooltip += ' (' + averagePerc + '%' + (showKelvin ? ', ' + kelvin + 'K' : '') + ')'
@@ -4994,7 +5038,7 @@ function getSunCalcTimes() {
 // If applicable, apply the current Time of Day Adjustment
 function applyCurrentAdjustmentEvent(force = false, instant = true) {
   try {
-    if (tempSettings.pauseTimeAdjustments || currentProfile?.setBrightness) return false;
+    if (tempSettings.pauseTimeAdjustments || !settings.adjustmentTimesActive || currentProfile?.setBrightness) return false;
     if (settings.adjustmentTimes.length === 0 || userIdleDimmed) return false;
 
     const date = new Date()
@@ -5061,8 +5105,13 @@ function handleBackgroundUpdate(force = false) {
     sendMicaWallpaper()
 
     // Time of Day Adjustments
-    if (settings.adjustmentTimes.length > 0 && !userIdleDimmed) {
+    if (settings.adjustmentTimesActive && settings.adjustmentTimes.length > 0 && !userIdleDimmed) {
       applyCurrentAdjustmentEvent(force, false)
+    }
+
+    // Sync scheduled color from current time event (respects manual tray toggles)
+    if (!isWindowsUserIdle && settings.adjustmentTimesActive && (settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
+      applyCurrentDisplayColorEffects(false)
     }
 
     // Re-apply display color transforms (gamma ramps can be overwritten by the OS)

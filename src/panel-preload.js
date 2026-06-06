@@ -494,6 +494,7 @@ window.setPanelVisibility = setPanelVisibility
 window.turnOffDisplays = turnOffDisplays
 window.toggleColorTemperature = (openPanel = false) => ipc.send('toggle-color-temperature', openPanel)
 window.toggleHighlightCompression = (openPanel = false) => ipc.send('toggle-highlight-compression', openPanel)
+window.toggleTimeAdjustments = () => ipc.send('toggle-time-adjustments')
 window.requestColorToggleState = () => ipc.send('request-color-toggle-state')
 window.allMonitors = []
 window.lastUpdate = Date.now()

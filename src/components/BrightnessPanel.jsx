@@ -12,6 +12,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     linkedLevelsActive: false,
     manualTemperatureActive: false,
     manualHighlightActive: false,
+    adjustmentTimesActive: true,
+    hasTimeAdjustments: false,
     names: {},
     update: false,
     sleeping: false,
@@ -53,6 +55,10 @@ const BrightnessPanel = memo(function BrightnessPanel() {
 
   const toggleHighlightCompression = () => {
     window.toggleHighlightCompression(false)
+  }
+
+  const toggleTimeAdjustments = () => {
+    window.toggleTimeAdjustments()
   }
 
   const getKelvinForMonitor = (monitor) => kelvinLevels[monitor.key] ?? 6500
@@ -255,6 +261,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const recievedSettings = (e) => {
     const settings = e.detail
     const linkedLevelsActive = (settings.linkedLevelsActive ?? false)
+    const adjustmentTimesActive = (settings.adjustmentTimesActive !== false)
+    const hasTimeAdjustments = (settings.adjustmentTimes?.length > 0)
     const sleepAction = (settings.sleepAction ?? "none")
     const updateInterval = (settings.updateInterval || 500) * 1
     const remaps = (settings.remaps || {})
@@ -263,6 +271,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     setState(prev => ({
       ...prev,
       linkedLevelsActive,
+      adjustmentTimesActive,
+      hasTimeAdjustments,
       remaps,
       names,
       updateInterval,
@@ -588,6 +598,16 @@ const BrightnessPanel = memo(function BrightnessPanel() {
             className="highlight">
             &#xE790;
           </div>
+          {
+            state.hasTimeAdjustments &&
+            <div
+              title={T.t("PANEL_BUTTON_TIME_ADJUSTMENTS")}
+              data-active={state.adjustmentTimesActive}
+              onClick={toggleTimeAdjustments}
+              className="schedule">
+              &#xE823;
+            </div>
+          }
           {
             window.settings.sleepAction !== "none" &&
             <div
