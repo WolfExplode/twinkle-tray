@@ -810,10 +810,13 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.adjustmentTimeTemperatureEnabled !== undefined) {
       if (settings.adjustmentTimeTemperatureEnabled) {
-        applyCurrentAdjustmentEvent(true, true)
+        applyCurrentDisplayColorEffects()
       } else {
+        // Scheduling disabled: restore manual values or reset to neutral
         for (const key in monitors) {
-          updateDisplayColor(monitors[key].id, { kelvin: 6500 })
+          const id = monitors[key].id
+          const kelvin = manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
+          updateDisplayColor(id, { kelvin })
         }
       }
       setTrayStatus()
@@ -822,10 +825,13 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.adjustmentTimeHighlightCompressionEnabled !== undefined) {
       if (settings.adjustmentTimeHighlightCompressionEnabled) {
-        applyCurrentAdjustmentEvent(true, true)
+        applyCurrentDisplayColorEffects()
       } else {
+        // Scheduling disabled: restore manual values or reset to neutral
         for (const key in monitors) {
-          updateDisplayColor(monitors[key].id, { highlightWeight: 0 })
+          const id = monitors[key].id
+          const weight = manualHighlightActive ? (manualHighlightLevels[id] ?? 0) : 0
+          updateDisplayColor(id, { highlightWeight: weight })
         }
       }
       setTrayStatus()
@@ -1780,6 +1786,10 @@ function showSoftwareDimOverlays() {
 
 const warmthLevels = {}
 const highlightLevels = {}
+const manualWarmthLevels = {}
+const manualHighlightLevels = {}
+let manualTemperatureActive = false
+let manualHighlightActive = false
 
 function getMonitorDisplayIndex(monitorId) {
   const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
@@ -1800,13 +1810,15 @@ function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
 
   if (isWindowsUserIdle) return
 
+  ColorGamma.getDisplayCount()
+
   const displayIndex = getMonitorDisplayIndex(monitorId)
   if (displayIndex == null) return
 
   const effectiveKelvin = warmthLevels[monitorId] ?? 6500
   const effectiveHighlight = highlightLevels[monitorId] ?? 0
-  const tempActive = settings.adjustmentTimeTemperatureEnabled && effectiveKelvin < 6500
-  const highlightActive = settings.adjustmentTimeHighlightCompressionEnabled && effectiveHighlight > 0
+  const tempActive = effectiveKelvin < 6500
+  const highlightActive = effectiveHighlight > 0
 
   if (!tempActive && !highlightActive) {
     ColorGamma.resetGammaRamp(displayIndex)
@@ -1822,16 +1834,22 @@ function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
 }
 
 function updateWarmth(monitorId, kelvin = 6500) {
-  updateDisplayColor(monitorId, { kelvin })
+  manualWarmthLevels[monitorId] = kelvin
+  if (manualTemperatureActive) {
+    updateDisplayColor(monitorId, { kelvin })
+  }
 }
 
 function updateHighlightCompression(monitorId, weight = 0) {
-  updateDisplayColor(monitorId, { highlightWeight: weight })
+  manualHighlightLevels[monitorId] = weight
+  if (manualHighlightActive) {
+    updateDisplayColor(monitorId, { highlightWeight: weight })
+  }
 }
 
 function sendDisplayColorLevels() {
-  sendToAllWindows('warmth-levels-updated', warmthLevels)
-  sendToAllWindows('highlight-levels-updated', highlightLevels)
+  sendToAllWindows('warmth-levels-updated', manualWarmthLevels)
+  sendToAllWindows('highlight-levels-updated', manualHighlightLevels)
 }
 
 function sendWarmthLevels() {
@@ -1846,6 +1864,35 @@ function showDisplayColorEffects() {
   const ids = new Set([...Object.keys(warmthLevels), ...Object.keys(highlightLevels)])
   for (const id of ids) {
     updateDisplayColor(id)
+  }
+}
+
+function applyCurrentDisplayColorEffects() {
+  const foundEvent = getCurrentAdjustmentEvent()
+
+  for (let key in monitors) {
+    const monitor = monitors[key]
+    const updates = {}
+
+    if (settings.adjustmentTimeTemperatureEnabled && foundEvent) {
+      let kelvin = foundEvent.kelvin ?? 6500
+      if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsKelvin?.[monitor.id] != null) {
+        kelvin = foundEvent.monitorsKelvin[monitor.id]
+      }
+      updates.kelvin = kelvin
+    }
+
+    if (settings.adjustmentTimeHighlightCompressionEnabled && foundEvent) {
+      let highlight = foundEvent.highlightWeight ?? 0
+      if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsHighlightWeight?.[monitor.id] != null) {
+        highlight = foundEvent.monitorsHighlightWeight[monitor.id]
+      }
+      updates.highlightWeight = highlight
+    }
+
+    if (Object.keys(updates).length) {
+      updateDisplayColor(monitor.id, updates)
+    }
   }
 }
 
@@ -2522,7 +2569,10 @@ function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 
     }
     updateBrightness(monitor.id, normalized)
     updateSoftwareDim(monitor.id, dimLevel)
-    updateDisplayColor(monitor.id, { kelvin, highlightWeight: highlight })
+    const colorUpdates = {}
+    if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
+    if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
+    if (Object.keys(colorUpdates).length) updateDisplayColor(monitor.id, colorUpdates)
     sendToAllWindows('monitors-updated', monitors)
   }
 }
@@ -2656,6 +2706,10 @@ ipcMain.on('toggle-color-temperature', (event, openPanel = false) => {
 
 ipcMain.on('toggle-highlight-compression', (event, openPanel = false) => {
   toggleHighlightCompression(openPanel)
+})
+
+ipcMain.on('request-color-toggle-state', () => {
+  sendColorToggleState()
 })
 
 ipcMain.on('request-monitors', function (event, arg) {
@@ -3705,9 +3759,9 @@ function getTemperatureMenuItem() {
   return {
     label: T.t("PANEL_LABEL_COLOR_TEMPERATURE"),
     type: 'checkbox',
-    checked: settings.adjustmentTimeTemperatureEnabled,
-    click: (menuItem) => {
-      writeSettings({ adjustmentTimeTemperatureEnabled: menuItem.checked }, true, true)
+    checked: manualTemperatureActive,
+    click: () => {
+      toggleColorTemperature()
     }
   }
 }
@@ -3716,16 +3770,16 @@ function getHighlightCompressionMenuItem() {
   return {
     label: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION"),
     type: 'checkbox',
-    checked: settings.adjustmentTimeHighlightCompressionEnabled,
-    click: (menuItem) => {
-      writeSettings({ adjustmentTimeHighlightCompressionEnabled: menuItem.checked }, true, true)
+    checked: manualHighlightActive,
+    click: () => {
+      toggleHighlightCompression()
     }
   }
 }
 
 function getCurrentKelvin() {
   try {
-    if (!settings.adjustmentTimeTemperatureEnabled) return 6500
+    if (!manualTemperatureActive && !settings.adjustmentTimeTemperatureEnabled) return 6500
     const activeLevels = Object.values(warmthLevels).filter(k => k > 0 && k < 6500)
     if (activeLevels.length) {
       return Math.round(activeLevels.reduce((a, b) => a + b, 0) / activeLevels.length)
@@ -3736,18 +3790,66 @@ function getCurrentKelvin() {
   return 6500
 }
 
+function sendColorToggleState() {
+  sendToAllWindows('color-toggle-state', { manualTemperatureActive, manualHighlightActive })
+}
+
 function toggleColorTemperature(openPanel = false) {
-  const enabling = !settings.adjustmentTimeTemperatureEnabled
-  writeSettings({ adjustmentTimeTemperatureEnabled: enabling }, true, true)
-  if (openPanel && enabling) {
+  const turningOn = !manualTemperatureActive
+  if (!turningOn) {
+    for (const key in monitors) {
+      const id = monitors[key].id
+      const kelvin = warmthLevels[id] ?? manualWarmthLevels[id]
+      if (kelvin != null && kelvin < 6500) manualWarmthLevels[id] = kelvin
+    }
+  }
+  manualTemperatureActive = !manualTemperatureActive
+  if (manualTemperatureActive) {
+    for (const key in monitors) {
+      const id = monitors[key].id
+      updateWarmth(id, manualWarmthLevels[id] ?? warmthLevels[id] ?? 6500)
+    }
+  } else {
+    const foundEvent = settings.adjustmentTimeTemperatureEnabled ? getCurrentAdjustmentEvent() : null
+    for (const key in monitors) {
+      const id = monitors[key].id
+      updateDisplayColor(id, { kelvin: foundEvent?.kelvin ?? 6500 })
+    }
+  }
+  setTrayMenu()
+  setTrayStatus()
+  sendColorToggleState()
+  if (openPanel && manualTemperatureActive) {
     setTimeout(() => toggleTray(true), 100)
   }
 }
 
 function toggleHighlightCompression(openPanel = false) {
-  const enabling = !settings.adjustmentTimeHighlightCompressionEnabled
-  writeSettings({ adjustmentTimeHighlightCompressionEnabled: enabling }, true, true)
-  if (openPanel && enabling) {
+  const turningOn = !manualHighlightActive
+  if (!turningOn) {
+    for (const key in monitors) {
+      const id = monitors[key].id
+      const weight = highlightLevels[id] ?? manualHighlightLevels[id]
+      if (weight != null && weight > 0) manualHighlightLevels[id] = weight
+    }
+  }
+  manualHighlightActive = !manualHighlightActive
+  if (manualHighlightActive) {
+    for (const key in monitors) {
+      const id = monitors[key].id
+      updateHighlightCompression(id, manualHighlightLevels[id] ?? highlightLevels[id] ?? 0)
+    }
+  } else {
+    const foundEvent = settings.adjustmentTimeHighlightCompressionEnabled ? getCurrentAdjustmentEvent() : null
+    for (const key in monitors) {
+      const id = monitors[key].id
+      updateDisplayColor(id, { highlightWeight: foundEvent?.highlightWeight ?? 0 })
+    }
+  }
+  setTrayMenu()
+  setTrayStatus()
+  sendColorToggleState()
+  if (openPanel && manualHighlightActive) {
     setTimeout(() => toggleTray(true), 100)
   }
 }
@@ -4778,6 +4880,7 @@ function getCurrentAdjustmentEvent() {
           foundEvent.monitors = Object.assign({}, event.monitors)
           foundEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
           foundEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
+          foundEvent.monitorsHighlightWeight = Object.assign({}, event.monitorsHighlightWeight)
           foundEvent.value = eventValue
         }
       }
@@ -4807,6 +4910,7 @@ function getNextAdjustmentEvent() {
         closestEvent.monitors = Object.assign({}, event.monitors)
         closestEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
         closestEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
+        closestEvent.monitorsHighlightWeight = Object.assign({}, event.monitorsHighlightWeight)
         closestEvent.value = eventValue
       }
 
@@ -4816,6 +4920,7 @@ function getNextAdjustmentEvent() {
         earliestEvent.monitors = Object.assign({}, event.monitors)
         earliestEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
         earliestEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
+        earliestEvent.monitorsHighlightWeight = Object.assign({}, event.monitorsHighlightWeight)
         earliestEvent.value = eventValue
       }
     }
@@ -4961,7 +5066,7 @@ function handleBackgroundUpdate(force = false) {
     }
 
     // Re-apply display color transforms (gamma ramps can be overwritten by the OS)
-    if (!isWindowsUserIdle && (settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
+    if (!isWindowsUserIdle && (manualTemperatureActive || manualHighlightActive || settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
       showDisplayColorEffects()
     }
   } catch (e) {

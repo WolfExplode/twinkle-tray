@@ -10,8 +10,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [state, setState] = useState({
     monitors: [],
     linkedLevelsActive: false,
-    temperatureEnabled: false,
-    highlightCompressionEnabled: false,
+    manualTemperatureActive: false,
+    manualHighlightActive: false,
     names: {},
     update: false,
     sleeping: false,
@@ -82,7 +82,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   const renderKelvinSlider = (monitor, options = {}) => {
-    if (!state.temperatureEnabled) return null
+    if (!state.manualTemperatureActive) return null
     const { linked = false, extended = false, name } = options
     const level = linked ? getLinkedKelvin() : getKelvinForMonitor(monitor)
     const slider = (
@@ -91,7 +91,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
         name={name ?? T.t("PANEL_LABEL_COLOR_TEMPERATURE")}
         id={monitor?.id}
         level={level}
-        min={1000}
+        min={2000}
         max={6500}
         hwid={monitor?.key}
         onChange={(val) => handleKelvinChange(val, linked ? null : monitor, linked)}
@@ -136,7 +136,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   const renderHighlightSlider = (monitor, options = {}) => {
-    if (!state.highlightCompressionEnabled) return null
+    if (!state.manualHighlightActive) return null
     const { linked = false, extended = false, name } = options
     const level = linked ? getLinkedHighlight() : getHighlightForMonitor(monitor)
     const slider = (
@@ -255,8 +255,6 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const recievedSettings = (e) => {
     const settings = e.detail
     const linkedLevelsActive = (settings.linkedLevelsActive ?? false)
-    const temperatureEnabled = (settings.adjustmentTimeTemperatureEnabled ?? false)
-    const highlightCompressionEnabled = (settings.adjustmentTimeHighlightCompressionEnabled ?? false)
     const sleepAction = (settings.sleepAction ?? "none")
     const updateInterval = (settings.updateInterval || 500) * 1
     const remaps = (settings.remaps || {})
@@ -265,8 +263,6 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     setState(prev => ({
       ...prev,
       linkedLevelsActive,
-      temperatureEnabled,
-      highlightCompressionEnabled,
       remaps,
       names,
       updateInterval,
@@ -275,8 +271,13 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     resetBrightnessInterval()
     updateMinMax()
     setDoBackgroundEvent(true)
-    if (temperatureEnabled) window.requestWarmthLevels?.()
-    if (highlightCompressionEnabled) window.requestHighlightLevels?.()
+  }
+
+  const recievedColorToggleState = (e) => {
+    const { manualTemperatureActive, manualHighlightActive } = e.detail
+    setState(prev => ({ ...prev, manualTemperatureActive, manualHighlightActive }))
+    if (manualTemperatureActive) window.requestWarmthLevels?.()
+    if (manualHighlightActive) window.requestHighlightLevels?.()
   }
 
   const recievedUpdate = (e) => {
@@ -356,6 +357,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.addEventListener("sleepUpdated", (e) => recievedSleep(e))
     window.addEventListener("warmthLevelsUpdated", (e) => recievedWarmthLevels(e))
     window.addEventListener("highlightLevelsUpdated", (e) => recievedHighlightLevels(e))
+    window.addEventListener("colorToggleStateUpdated", (e) => recievedColorToggleState(e))
     window.addEventListener("isRefreshing", (e) => handleIsRefreshingUpdate(e))
 
     if (window.isAppX === false) {
@@ -365,8 +367,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     // Update brightness every interval, if changed
     window.requestSettings()
     window.requestMonitors()
-    if (window.settings?.adjustmentTimeTemperatureEnabled) window.requestWarmthLevels?.()
-    if (window.settings?.adjustmentTimeHighlightCompressionEnabled) window.requestHighlightLevels?.()
+    window.requestColorToggleState?.()
     window.ipc.send('request-localization')
     window.reactReady = true
 
@@ -378,6 +379,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
       window.removeEventListener("sleepUpdated")
       window.removeEventListener("warmthLevelsUpdated")
       window.removeEventListener("highlightLevelsUpdated")
+      window.removeEventListener("colorToggleStateUpdated")
       window.removeEventListener("isRefreshing")
       window.removeEventListener("updateProgress")
     }
@@ -574,14 +576,14 @@ const BrightnessPanel = memo(function BrightnessPanel() {
           }
           <div
             title={T.t("PANEL_LABEL_COLOR_TEMPERATURE")}
-            data-active={state.temperatureEnabled}
+            data-active={state.manualTemperatureActive}
             onClick={toggleColorTemperature}
             className="temp">
             &#xEA80;
           </div>
           <div
             title={T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION")}
-            data-active={state.highlightCompressionEnabled}
+            data-active={state.manualHighlightActive}
             onClick={toggleHighlightCompression}
             className="highlight">
             &#xE790;

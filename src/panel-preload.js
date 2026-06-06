@@ -311,6 +311,12 @@ ipc.on('highlight-levels-updated', (event, levels) => {
     }))
 })
 
+ipc.on('color-toggle-state', (event, state) => {
+    window.dispatchEvent(new CustomEvent('colorToggleStateUpdated', {
+        detail: state
+    }))
+})
+
 // Localization recieved
 ipc.on('localization-updated', (event, localization) => {
     window.dispatchEvent(new CustomEvent('localizationUpdated', {
@@ -488,6 +494,7 @@ window.setPanelVisibility = setPanelVisibility
 window.turnOffDisplays = turnOffDisplays
 window.toggleColorTemperature = (openPanel = false) => ipc.send('toggle-color-temperature', openPanel)
 window.toggleHighlightCompression = (openPanel = false) => ipc.send('toggle-highlight-compression', openPanel)
+window.requestColorToggleState = () => ipc.send('request-color-toggle-state')
 window.allMonitors = []
 window.lastUpdate = Date.now()
 window.showPanel = false
