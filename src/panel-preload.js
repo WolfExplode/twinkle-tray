@@ -487,6 +487,7 @@ window.panelAnimationDone = panelAnimationDone
 window.setPanelVisibility = setPanelVisibility
 window.turnOffDisplays = turnOffDisplays
 window.toggleColorTemperature = (openPanel = false) => ipc.send('toggle-color-temperature', openPanel)
+window.toggleHighlightCompression = (openPanel = false) => ipc.send('toggle-highlight-compression', openPanel)
 window.allMonitors = []
 window.lastUpdate = Date.now()
 window.showPanel = false

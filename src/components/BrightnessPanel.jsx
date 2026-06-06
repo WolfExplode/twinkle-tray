@@ -51,6 +51,10 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.toggleColorTemperature(false)
   }
 
+  const toggleHighlightCompression = () => {
+    window.toggleHighlightCompression(false)
+  }
+
   const getKelvinForMonitor = (monitor) => kelvinLevels[monitor.key] ?? 6500
 
   const getLinkedKelvin = () => {
@@ -574,6 +578,13 @@ const BrightnessPanel = memo(function BrightnessPanel() {
             onClick={toggleColorTemperature}
             className="temp">
             &#xEA80;
+          </div>
+          <div
+            title={T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION")}
+            data-active={state.highlightCompressionEnabled}
+            onClick={toggleHighlightCompression}
+            className="highlight">
+            &#xE790;
           </div>
           {
             window.settings.sleepAction !== "none" &&

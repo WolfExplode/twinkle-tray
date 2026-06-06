@@ -2654,6 +2654,10 @@ ipcMain.on('toggle-color-temperature', (event, openPanel = false) => {
   toggleColorTemperature(openPanel)
 })
 
+ipcMain.on('toggle-highlight-compression', (event, openPanel = false) => {
+  toggleHighlightCompression(openPanel)
+})
+
 ipcMain.on('request-monitors', function (event, arg) {
   sendToAllWindows("monitors-updated", monitors)
   //refreshMonitors(false, true)
@@ -3628,6 +3632,7 @@ function setTrayMenu() {
   const contextMenu = Menu.buildFromTemplate([
     getTimeAdjustmentsMenuItem(),
     getTemperatureMenuItem(),
+    getHighlightCompressionMenuItem(),
     getDetectIdleMenuItem(),
     getProfilesMenuItem(),
     getPausableSeparatorMenuItem(),
@@ -3707,6 +3712,17 @@ function getTemperatureMenuItem() {
   }
 }
 
+function getHighlightCompressionMenuItem() {
+  return {
+    label: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION"),
+    type: 'checkbox',
+    checked: settings.adjustmentTimeHighlightCompressionEnabled,
+    click: (menuItem) => {
+      writeSettings({ adjustmentTimeHighlightCompressionEnabled: menuItem.checked }, true, true)
+    }
+  }
+}
+
 function getCurrentKelvin() {
   try {
     if (!settings.adjustmentTimeTemperatureEnabled) return 6500
@@ -3723,6 +3739,14 @@ function getCurrentKelvin() {
 function toggleColorTemperature(openPanel = false) {
   const enabling = !settings.adjustmentTimeTemperatureEnabled
   writeSettings({ adjustmentTimeTemperatureEnabled: enabling }, true, true)
+  if (openPanel && enabling) {
+    setTimeout(() => toggleTray(true), 100)
+  }
+}
+
+function toggleHighlightCompression(openPanel = false) {
+  const enabling = !settings.adjustmentTimeHighlightCompressionEnabled
+  writeSettings({ adjustmentTimeHighlightCompressionEnabled: enabling }, true, true)
   if (openPanel && enabling) {
     setTimeout(() => toggleTray(true), 100)
   }
