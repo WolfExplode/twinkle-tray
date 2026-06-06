@@ -54,6 +54,7 @@
     "PANEL_LABEL_INPUTS": "Inputs",
     "PANEL_LABEL_OFF_ON": "Power State",
     "PANEL_LABEL_COLOR_TEMPERATURE": "Color Temperature",
+    "PANEL_LABEL_HIGHLIGHT_COMPRESSION": "Highlight Compression",
     "PANEL_LABEL_VOLUME": "Volume",
     "PANEL_LABEL_TURN_OFF": "Power off",
     "PANEL_LABEL_TURN_ON": "Power on",

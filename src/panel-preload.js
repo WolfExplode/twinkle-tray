@@ -101,8 +101,16 @@ function updateWarmth(monitorId, kelvin) {
     ipc.send('update-warmth', { monitorId, kelvin })
 }
 
+function updateHighlightCompression(monitorId, weight) {
+    ipc.send('update-highlight-compression', { monitorId, weight })
+}
+
 function requestWarmthLevels() {
     ipc.send('request-warmth-levels')
+}
+
+function requestHighlightLevels() {
+    ipc.send('request-highlight-levels')
 }
 
 function detectSunValley() {
@@ -286,10 +294,19 @@ ipc.on('settings-updated', (event, settings) => {
     if (settings.adjustmentTimeTemperatureEnabled) {
         requestWarmthLevels()
     }
+    if (settings.adjustmentTimeHighlightCompressionEnabled) {
+        requestHighlightLevels()
+    }
 })
 
 ipc.on('warmth-levels-updated', (event, levels) => {
     window.dispatchEvent(new CustomEvent('warmthLevelsUpdated', {
+        detail: levels
+    }))
+})
+
+ipc.on('highlight-levels-updated', (event, levels) => {
+    window.dispatchEvent(new CustomEvent('highlightLevelsUpdated', {
         detail: levels
     }))
 })
@@ -455,7 +472,9 @@ window.ipc = ipc
 window.updateBrightness = updateBrightness
 window.updateSoftwareDim = updateSoftwareDim
 window.updateWarmth = updateWarmth
+window.updateHighlightCompression = updateHighlightCompression
 window.requestWarmthLevels = requestWarmthLevels
+window.requestHighlightLevels = requestHighlightLevels
 window.requestMonitors = requestMonitors
 window.openSettings = openSettings
 window.sendSettings = sendSettings

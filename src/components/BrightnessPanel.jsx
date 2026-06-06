@@ -11,6 +11,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     monitors: [],
     linkedLevelsActive: false,
     temperatureEnabled: false,
+    highlightCompressionEnabled: false,
     names: {},
     update: false,
     sleeping: false,
@@ -23,6 +24,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [lastLevels, setLastLevels] = useState([])
   const [softwareDim, setSoftwareDim] = useState({})
   const [kelvinLevels, setKelvinLevels] = useState({})
+  const [highlightLevels, setHighlightLevels] = useState({})
   const [T] = useState(new TranslateReact({}, {}))
 
   const numMonitors = useMemo(() => {
@@ -96,6 +98,60 @@ const BrightnessPanel = memo(function BrightnessPanel() {
       return (
         <div className="feature-row feature-temperature" key={(monitor?.key || "linked") + ".kelvin-row"}>
           <div className="feature-icon"><span className="icon vfix">&#xEA80;</span></div>
+          {slider}
+        </div>
+      )
+    }
+    return slider
+  }
+
+  const getHighlightForMonitor = (monitor) => highlightLevels[monitor.key] ?? 0
+
+  const getLinkedHighlight = () => {
+    for (const key in state.monitors) {
+      const monitor = state.monitors[key]
+      if (highlightLevels[monitor.key] != null) return highlightLevels[monitor.key]
+    }
+    return 0
+  }
+
+  const handleHighlightChange = (weight, monitor, linked = false) => {
+    if (linked || state.linkedLevelsActive) {
+      const newHighlight = {}
+      for (let key in state.monitors) {
+        const m = state.monitors[key]
+        if ((m.type == "none" && m.hdr !== "active") || window.settings?.hideDisplays?.[m.key] === true) continue
+        newHighlight[m.key] = weight
+        window.updateHighlightCompression(m.id, weight)
+      }
+      setHighlightLevels(newHighlight)
+    } else if (monitor) {
+      setHighlightLevels(prev => ({ ...prev, [monitor.key]: weight }))
+      window.updateHighlightCompression(monitor.id, weight)
+    }
+  }
+
+  const renderHighlightSlider = (monitor, options = {}) => {
+    if (!state.highlightCompressionEnabled) return null
+    const { linked = false, extended = false, name } = options
+    const level = linked ? getLinkedHighlight() : getHighlightForMonitor(monitor)
+    const slider = (
+      <Slider
+        key={(monitor?.key || "linked") + ".highlight"}
+        name={name ?? T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION")}
+        id={monitor?.id}
+        level={level}
+        min={0}
+        max={100}
+        hwid={monitor?.key}
+        onChange={(val) => handleHighlightChange(val, linked ? null : monitor, linked)}
+        scrollAmount={window.settings?.scrollFlyoutAmount}
+      />
+    )
+    if (extended) {
+      return (
+        <div className="feature-row feature-highlight" key={(monitor?.key || "linked") + ".highlight-row"}>
+          <div className="feature-icon"><span className="icon vfix">&#xE790;</span></div>
           {slider}
         </div>
       )
@@ -196,6 +252,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     const settings = e.detail
     const linkedLevelsActive = (settings.linkedLevelsActive ?? false)
     const temperatureEnabled = (settings.adjustmentTimeTemperatureEnabled ?? false)
+    const highlightCompressionEnabled = (settings.adjustmentTimeHighlightCompressionEnabled ?? false)
     const sleepAction = (settings.sleepAction ?? "none")
     const updateInterval = (settings.updateInterval || 500) * 1
     const remaps = (settings.remaps || {})
@@ -205,6 +262,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
       ...prev,
       linkedLevelsActive,
       temperatureEnabled,
+      highlightCompressionEnabled,
       remaps,
       names,
       updateInterval,
@@ -214,6 +272,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     updateMinMax()
     setDoBackgroundEvent(true)
     if (temperatureEnabled) window.requestWarmthLevels?.()
+    if (highlightCompressionEnabled) window.requestHighlightLevels?.()
   }
 
   const recievedUpdate = (e) => {
@@ -228,6 +287,18 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const recievedWarmthLevels = (e) => {
     const levels = e.detail
     setKelvinLevels(prev => {
+      const updated = { ...prev }
+      for (const key in state.monitors) {
+        const monitor = state.monitors[key]
+        if (levels[monitor.id] != null) updated[monitor.key] = levels[monitor.id]
+      }
+      return updated
+    })
+  }
+
+  const recievedHighlightLevels = (e) => {
+    const levels = e.detail
+    setHighlightLevels(prev => {
       const updated = { ...prev }
       for (const key in state.monitors) {
         const monitor = state.monitors[key]
@@ -280,6 +351,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.addEventListener("updateUpdated", (e) => recievedUpdate(e))
     window.addEventListener("sleepUpdated", (e) => recievedSleep(e))
     window.addEventListener("warmthLevelsUpdated", (e) => recievedWarmthLevels(e))
+    window.addEventListener("highlightLevelsUpdated", (e) => recievedHighlightLevels(e))
     window.addEventListener("isRefreshing", (e) => handleIsRefreshingUpdate(e))
 
     if (window.isAppX === false) {
@@ -290,6 +362,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.requestSettings()
     window.requestMonitors()
     if (window.settings?.adjustmentTimeTemperatureEnabled) window.requestWarmthLevels?.()
+    if (window.settings?.adjustmentTimeHighlightCompressionEnabled) window.requestHighlightLevels?.()
     window.ipc.send('request-localization')
     window.reactReady = true
 
@@ -300,6 +373,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
       window.removeEventListener("updateUpdated")
       window.removeEventListener("sleepUpdated")
       window.removeEventListener("warmthLevelsUpdated")
+      window.removeEventListener("highlightLevelsUpdated")
       window.removeEventListener("isRefreshing")
       window.removeEventListener("updateProgress")
     }
@@ -338,6 +412,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
             <>
               <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={linkedLevel} min={softwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
               {renderKelvinSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_COLOR_TEMPERATURE") })}
+              {renderHighlightSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION") })}
             </>
           )
         }
@@ -428,6 +503,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                       </div>
                       <HDRSliders monitor={monitor} scrollAmount={window.settings?.scrollFlyoutAmount} />
                       {renderKelvinSlider(monitor, { extended: true })}
+                      {renderHighlightSlider(monitor, { extended: true })}
                     </div>
                   )
                 }
@@ -438,6 +514,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                   <div className="monitor-sliders" key={monitor.key}>
                     <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} />
                     {renderKelvinSlider(monitor)}
+                    {renderHighlightSlider(monitor)}
                   </div>
                 )
               } else {
@@ -463,6 +540,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                       )
                     })()}
                     {renderKelvinSlider(monitor, { extended: true })}
+                    {renderHighlightSlider(monitor, { extended: true })}
                     <DDCCISliders monitor={monitor} monitorFeatures={monitorFeatures} scrollAmount={window.settings?.scrollFlyoutAmount} />
                     {showHDRSliders ? <HDRSliders monitor={monitor} scrollAmount={window.settings?.scrollFlyoutAmount} /> : null}
                   </div>

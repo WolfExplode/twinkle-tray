@@ -6,6 +6,7 @@ const AppStartup = require("bindings")("windows_app_startup");
 const WindowMaterial = require("bindings")("windows_window_material");
 const ColorGamma = require("bindings")("windows_color_gamma");
 const { getWhitePointForKelvin } = require("./color-temperature");
+const { buildGammaRamp } = require("./display-tone-curve");
 
 module.exports = {
     WindowUtils: {
@@ -48,12 +49,18 @@ module.exports = {
     ColorGamma: {
         getDisplayCount: ColorGamma.getDisplayCount,
         setGammaRamp: ColorGamma.setGammaRamp,
+        setGammaRampRaw: ColorGamma.setGammaRampRaw,
         resetGammaRamp: ColorGamma.resetGammaRamp,
         resetAllGammaRamps: ColorGamma.resetAllGammaRamps,
         getWhitePointForKelvin,
+        buildGammaRamp,
         setColorTemperature: (displayIndex, kelvin) => {
             const { r, g, b } = getWhitePointForKelvin(kelvin)
             return ColorGamma.setGammaRamp(displayIndex, r, g, b)
+        },
+        applyDisplayTransform: (displayIndex, { kelvin = 6500, highlightWeight = 0 } = {}) => {
+            const ramp = buildGammaRamp({ kelvin, highlightWeight })
+            return ColorGamma.setGammaRampRaw(displayIndex, ramp)
         }
     }
 }

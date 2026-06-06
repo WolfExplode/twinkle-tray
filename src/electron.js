@@ -483,6 +483,7 @@ const defaultSettings = {
   adjustmentTimeSpeed: "normal",
   adjustmentTimeAnimate: false,
   adjustmentTimeTemperatureEnabled: false,
+  adjustmentTimeHighlightCompressionEnabled: false,
   adjustmentTimeLongitude: 0,
   adjustmentTimeLatitude: 0,
   checkTimeAtStartup: true,
@@ -813,7 +814,19 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         applyCurrentAdjustmentEvent(true, true)
       } else {
         for (const key in monitors) {
-          updateWarmth(monitors[key].id, 6500)
+          updateDisplayColor(monitors[key].id, { kelvin: 6500 })
+        }
+      }
+      setTrayStatus()
+      setTrayMenu()
+    }
+
+    if (newSettings.adjustmentTimeHighlightCompressionEnabled !== undefined) {
+      if (settings.adjustmentTimeHighlightCompressionEnabled) {
+        applyCurrentAdjustmentEvent(true, true)
+      } else {
+        for (const key in monitors) {
+          updateDisplayColor(monitors[key].id, { highlightWeight: 0 })
         }
       }
       setTrayStatus()
@@ -1767,6 +1780,7 @@ function showSoftwareDimOverlays() {
 }
 
 const warmthLevels = {}
+const highlightLevels = {}
 
 function getMonitorDisplayIndex(monitorId) {
   const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
@@ -1781,39 +1795,58 @@ function getMonitorDisplayIndex(monitorId) {
   return null
 }
 
-function updateWarmth(monitorId, kelvin = 6500) {
-  warmthLevels[monitorId] = kelvin
+function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
+  if (kelvin !== undefined) warmthLevels[monitorId] = kelvin
+  if (highlightWeight !== undefined) highlightLevels[monitorId] = highlightWeight
 
   if (isWindowsUserIdle) return
 
   const displayIndex = getMonitorDisplayIndex(monitorId)
   if (displayIndex == null) return
 
-  if (!settings.adjustmentTimeTemperatureEnabled || kelvin >= 6500) {
+  const effectiveKelvin = warmthLevels[monitorId] ?? 6500
+  const effectiveHighlight = highlightLevels[monitorId] ?? 0
+  const tempActive = settings.adjustmentTimeTemperatureEnabled && effectiveKelvin < 6500
+  const highlightActive = settings.adjustmentTimeHighlightCompressionEnabled && effectiveHighlight > 0
+
+  if (!tempActive && !highlightActive) {
     ColorGamma.resetGammaRamp(displayIndex)
-    sendWarmthLevels()
-    setTrayStatus()
-    return
+  } else {
+    ColorGamma.applyDisplayTransform(displayIndex, {
+      kelvin: tempActive ? effectiveKelvin : 6500,
+      highlightWeight: highlightActive ? effectiveHighlight / 100 : 0
+    })
   }
 
-  ColorGamma.setColorTemperature(displayIndex, kelvin)
-  sendWarmthLevels()
+  sendDisplayColorLevels()
   setTrayStatus()
 }
 
-function sendWarmthLevels() {
-  sendToAllWindows('warmth-levels-updated', warmthLevels)
+function updateWarmth(monitorId, kelvin = 6500) {
+  updateDisplayColor(monitorId, { kelvin })
 }
 
-function hideWarmthOverlays() {
+function updateHighlightCompression(monitorId, weight = 0) {
+  updateDisplayColor(monitorId, { highlightWeight: weight })
+}
+
+function sendDisplayColorLevels() {
+  sendToAllWindows('warmth-levels-updated', warmthLevels)
+  sendToAllWindows('highlight-levels-updated', highlightLevels)
+}
+
+function sendWarmthLevels() {
+  sendDisplayColorLevels()
+}
+
+function hideDisplayColorEffects() {
   ColorGamma.resetAllGammaRamps()
 }
 
-function showWarmthOverlays() {
-  for (const id in warmthLevels) {
-    if (warmthLevels[id] < 6500) {
-      updateWarmth(id, warmthLevels[id])
-    }
+function showDisplayColorEffects() {
+  const ids = new Set([...Object.keys(warmthLevels), ...Object.keys(highlightLevels)])
+  for (const id of ids) {
+    updateDisplayColor(id)
   }
 }
 
@@ -2394,7 +2427,7 @@ function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, 
 }
 
 let currentTransition = null
-function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, onlyMonitorIds = null) {
+function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}, onlyMonitorIds = null) {
   if (currentTransition !== null) clearInterval(currentTransition);
 
   // Slow down transition
@@ -2448,7 +2481,7 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
       if (numDone === targetMonitorCount) {
         clearInterval(currentTransition);
         currentTransition = null
-        // Apply software dim and warmth once transition reaches the target
+        // Apply software dim and display color once transition reaches the target
         for (let k in monitors) {
           if (onlyMonitorIds && !onlyMonitorIds.includes(monitors[k].id)) continue
           let dimLevel = softwareDimLevel
@@ -2460,29 +2493,37 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
           if (usePerMonitorTargets && eventMonitorsKelvin[monitors[k].id] != null) {
             kelvin = eventMonitorsKelvin[monitors[k].id]
           }
-          updateWarmth(monitors[k].id, kelvin)
+          let highlight = highlightWeight
+          if (usePerMonitorTargets && eventMonitorsHighlightWeight[monitors[k].id] != null) {
+            highlight = eventMonitorsHighlightWeight[monitors[k].id]
+          }
+          updateDisplayColor(monitors[k].id, { kelvin, highlightWeight: highlight })
         }
       }
     }
   }, settings.updateInterval * transitionIntervalMult)
 }
 
-function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}) {
+function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}) {
   for (let key in monitors) {
     const monitor = monitors[key]
     let normalized = level
     let dimLevel = softwareDimLevel
     let kelvin = warmthKelvin
+    let highlight = highlightWeight
     if (settings.adjustmentTimeIndividualDisplays) {
       normalized = (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
       dimLevel = (eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel)
       if (eventMonitorsKelvin[monitor.id] != null) {
         kelvin = eventMonitorsKelvin[monitor.id]
       }
+      if (eventMonitorsHighlightWeight[monitor.id] != null) {
+        highlight = eventMonitorsHighlightWeight[monitor.id]
+      }
     }
     updateBrightness(monitor.id, normalized)
     updateSoftwareDim(monitor.id, dimLevel)
-    updateWarmth(monitor.id, kelvin)
+    updateDisplayColor(monitor.id, { kelvin, highlightWeight: highlight })
     sendToAllWindows('monitors-updated', monitors)
   }
 }
@@ -2598,8 +2639,16 @@ ipcMain.on('update-warmth', (event, { monitorId, kelvin }) => {
   updateWarmth(monitorId, kelvin)
 })
 
+ipcMain.on('update-highlight-compression', (event, { monitorId, weight }) => {
+  updateHighlightCompression(monitorId, weight)
+})
+
 ipcMain.on('request-warmth-levels', () => {
   sendWarmthLevels()
+})
+
+ipcMain.on('request-highlight-levels', () => {
+  sendToAllWindows('highlight-levels-updated', highlightLevels)
 })
 
 ipcMain.on('toggle-color-temperature', (event, openPanel = false) => {
@@ -2868,7 +2917,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
         if(!isWindowsUserIdle) {
           console.log("Displays have gone to sleep.")
           hideSoftwareDimOverlays()
-          hideWarmthOverlays()
+          hideDisplayColorEffects()
 
           // If we were about to do a hardware event, stop.
           if (handleChangeTimeout1) clearTimeout(handleChangeTimeout1);
@@ -2884,7 +2933,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
           recentlyWokeUp = true
           handleMetricsChange("GUID_SESSION_USER_PRESENCE")
           setTimeout(showSoftwareDimOverlays, 500)
-          setTimeout(showWarmthOverlays, 500)
+          setTimeout(showDisplayColorEffects, 500)
           setTimeout(() => {
             recentlyWokeUp = false
           },
@@ -4882,10 +4931,12 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           const eventMonitorsSoftwareDim = foundEvent.monitorsSoftwareDim ?? {}
           const eventKelvin = foundEvent.kelvin ?? 6500
           const eventMonitorsKelvin = foundEvent.monitorsKelvin ?? {}
+          const eventHighlightWeight = foundEvent.highlightWeight ?? 0
+          const eventMonitorsHighlightWeight = foundEvent.monitorsHighlightWeight ?? {}
           if (instant || settings.adjustmentTimeSpeed === "instant") {
-            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin)
+            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight)
           } else {
-            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin)
+            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight)
           }
         })
         setTrayStatus()
@@ -4914,6 +4965,11 @@ function handleBackgroundUpdate(force = false) {
     // Time of Day Adjustments
     if (settings.adjustmentTimes.length > 0 && !userIdleDimmed) {
       applyCurrentAdjustmentEvent(force, false)
+    }
+
+    // Re-apply display color transforms (gamma ramps can be overwritten by the OS)
+    if (!isWindowsUserIdle && (settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
+      showDisplayColorEffects()
     }
   } catch (e) {
     console.error(e)

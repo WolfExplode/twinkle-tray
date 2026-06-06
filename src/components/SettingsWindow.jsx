@@ -690,10 +690,19 @@ export default class SettingsWindow extends PureComponent {
     getAdjustmentTimesMonitors = (time, index) => {
         const softwareDimMin = this.getSoftwareDimMin()
         const tempEnabled = this.state.rawSettings?.adjustmentTimeTemperatureEnabled
+        const highlightEnabled = this.state.rawSettings?.adjustmentTimeHighlightCompressionEnabled
 
         const kelvinSlider = tempEnabled ? (
             <Slider key={index + ".kelvin"} name="Color Temperature (K)" min={1000} max={6500} level={this.state.adjustmentTimes[index].kelvin ?? 6500} onChange={(value) => {
                 this.state.adjustmentTimes[index].kelvin = value
+                this.forceUpdate()
+                this.adjustmentTimesUpdated()
+            }} scrolling={false} />
+        ) : null
+
+        const highlightSlider = highlightEnabled ? (
+            <Slider key={index + ".highlight"} name={T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION")} min={0} max={100} level={this.state.adjustmentTimes[index].highlightWeight ?? 0} onChange={(value) => {
+                this.state.adjustmentTimes[index].highlightWeight = value
                 this.forceUpdate()
                 this.adjustmentTimesUpdated()
             }} scrolling={false} />
@@ -728,11 +737,25 @@ export default class SettingsWindow extends PureComponent {
                         this.adjustmentTimesUpdated()
                     }
 
+                    let highlightWeight = time.highlightWeight ?? 0
+                    if (this.state.adjustmentTimes[index]?.monitorsHighlightWeight && this.state.adjustmentTimes[index].monitorsHighlightWeight[monitor.id] != null) {
+                        highlightWeight = this.state.adjustmentTimes[index].monitorsHighlightWeight[monitor.id]
+                    } else {
+                        if (this.state.adjustmentTimes[index].monitorsHighlightWeight === undefined) {
+                            this.state.adjustmentTimes[index].monitorsHighlightWeight = {}
+                        }
+                        this.state.adjustmentTimes[index].monitorsHighlightWeight[monitor.id] = highlightWeight
+                        this.adjustmentTimesUpdated()
+                    }
+
                     return (
                         <React.Fragment key={monitor.id}>
                             <Slider key={monitor.id + ".brightness"} min={softwareDimMin} max={100} name={getMonitorName(monitor, this.state.names)} onChange={(value) => { this.getAdjustmentTimesMonitorsChanged(index, monitor, value) }} level={level} scrolling={false} />
                             {tempEnabled ? (
                                 <Slider key={monitor.id + ".kelvin"} name={`${getMonitorName(monitor, this.state.names)} (K)`} min={1000} max={6500} level={kelvin} onChange={(value) => { this.getAdjustmentTimesKelvinChanged(index, monitor, value) }} scrolling={false} />
+                            ) : null}
+                            {highlightEnabled ? (
+                                <Slider key={monitor.id + ".highlight"} name={`${getMonitorName(monitor, this.state.names)} (${T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION")})`} min={0} max={100} level={highlightWeight} onChange={(value) => { this.getAdjustmentTimesHighlightChanged(index, monitor, value) }} scrolling={false} />
                             ) : null}
                         </React.Fragment>
                     )
@@ -755,6 +778,7 @@ export default class SettingsWindow extends PureComponent {
                         this.adjustmentTimesUpdated()
                     }} scrolling={false} />
                     {kelvinSlider}
+                    {highlightSlider}
                 </>
             )
         }
@@ -779,6 +803,15 @@ export default class SettingsWindow extends PureComponent {
             this.state.adjustmentTimes[index].monitorsKelvin = {}
         }
         this.state.adjustmentTimes[index].monitorsKelvin[monitor.id] = kelvin
+        this.forceUpdate()
+        this.adjustmentTimesUpdated()
+    }
+
+    getAdjustmentTimesHighlightChanged = (index, monitor, highlightWeight) => {
+        if (this.state.adjustmentTimes[index].monitorsHighlightWeight === undefined) {
+            this.state.adjustmentTimes[index].monitorsHighlightWeight = {}
+        }
+        this.state.adjustmentTimes[index].monitorsHighlightWeight[monitor.id] = highlightWeight
         this.forceUpdate()
         this.adjustmentTimesUpdated()
     }
@@ -1184,10 +1217,12 @@ export default class SettingsWindow extends PureComponent {
             brightness: 50,
             softwareDim: 0,
             kelvin: 6500,
+            highlightWeight: 0,
             time: "12:30",
             monitors: {},
             monitorsSoftwareDim: {},
             monitorsKelvin: {},
+            monitorsHighlightWeight: {},
             useSunCalc: false,
             sunCalc: "sunrise"
         })
@@ -1352,6 +1387,7 @@ export default class SettingsWindow extends PureComponent {
                                     <div className="sectionTitle">{T.t("SETTINGS_TIME_TITLE")}</div>
                                     <p>{T.t("SETTINGS_TIME_DESC")}</p>
                                     <SettingsOption title="Color Temperature" description="When enabled, each time adjustment can set a warm tint on your displays (6500K = daylight, 1000K = candlelight)." input={this.renderToggle("adjustmentTimeTemperatureEnabled")} />
+                                    <SettingsOption title={T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION")} description="When enabled, roll off bright highlights to reduce perceived dynamic range. Works best on SDR displays." input={this.renderToggle("adjustmentTimeHighlightCompressionEnabled")} />
                                     <SettingsOption title={T.t("SETTINGS_TIME_INDIVIDUAL_TITLE")} description={T.t("SETTINGS_TIME_INDIVIDUAL_DESC")} input={this.renderToggle("adjustmentTimeIndividualDisplays")} />
                                     <div className="adjustmentTimes">
                                         {this.getAdjustmentTimes()}
