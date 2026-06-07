@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useMemo, useState } from "react";
+import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import Slider from "./Slider";
 import DDCCISliders from "./DDCCISliders"
 import HDRSliders from "./HDRSliders";
@@ -27,6 +27,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [softwareDim, setSoftwareDim] = useState({})
   const [kelvinLevels, setKelvinLevels] = useState({})
   const [highlightLevels, setHighlightLevels] = useState({})
+  const [scheduleLocked, setScheduleLocked] = useState({ brightness: false, temperature: false, highlight: false })
+  const monitorsRef = useRef({})
   const [T] = useState(new TranslateReact({}, {}))
 
   const numMonitors = useMemo(() => {
@@ -88,20 +90,23 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   const renderKelvinSlider = (monitor, options = {}) => {
-    if (!state.manualTemperatureActive) return null
+    if (!state.manualTemperatureActive && !scheduleLocked.temperature) return null
     const { linked = false, extended = false, name } = options
     const level = linked ? getLinkedKelvin() : getKelvinForMonitor(monitor)
+    const locked = scheduleLocked.temperature
     const slider = (
       <Slider
         key={(monitor?.key || "linked") + ".kelvin"}
         name={name ?? T.t("PANEL_LABEL_COLOR_TEMPERATURE")}
         id={monitor?.id}
         level={level}
-        min={2000}
+        min={3000}
         max={6500}
         hwid={monitor?.key}
         onChange={(val) => handleKelvinChange(val, linked ? null : monitor, linked)}
         scrollAmount={window.settings?.scrollFlyoutAmount}
+        disabled={locked}
+        lockedTitle="Overridden by schedule"
       />
     )
     if (extended) {
@@ -142,9 +147,10 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   const renderHighlightSlider = (monitor, options = {}) => {
-    if (!state.manualHighlightActive) return null
+    if (!state.manualHighlightActive && !scheduleLocked.highlight) return null
     const { linked = false, extended = false, name } = options
     const level = linked ? getLinkedHighlight() : getHighlightForMonitor(monitor)
+    const locked = scheduleLocked.highlight
     const slider = (
       <Slider
         key={(monitor?.key || "linked") + ".highlight"}
@@ -156,6 +162,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
         hwid={monitor?.key}
         onChange={(val) => handleHighlightChange(val, linked ? null : monitor, linked)}
         scrollAmount={window.settings?.scrollFlyoutAmount}
+        disabled={locked}
+        lockedTitle="Overridden by schedule"
       />
     )
     if (extended) {
@@ -206,6 +214,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   // Update monitor info
   const recievedMonitors = (e) => {
     let newMonitors = { ...e.detail }
+    monitorsRef.current = newMonitors
     setLastLevels([])
     // Reset panel height so it's recalculated
     panelHeight = -1
@@ -290,6 +299,12 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     if (manualHighlightActive) window.requestHighlightLevels?.()
   }
 
+  const recievedScheduleLockState = (e) => {
+    setScheduleLocked(e.detail)
+    window.requestWarmthLevels?.()
+    window.requestHighlightLevels?.()
+  }
+
   const recievedUpdate = (e) => {
     const update = e.detail
     setState(prev => ({ ...prev, update }))
@@ -303,8 +318,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     const levels = e.detail
     setKelvinLevels(prev => {
       const updated = { ...prev }
-      for (const key in state.monitors) {
-        const monitor = state.monitors[key]
+      for (const key in monitorsRef.current) {
+        const monitor = monitorsRef.current[key]
         if (levels[monitor.id] != null) updated[monitor.key] = levels[monitor.id]
       }
       return updated
@@ -315,8 +330,8 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     const levels = e.detail
     setHighlightLevels(prev => {
       const updated = { ...prev }
-      for (const key in state.monitors) {
-        const monitor = state.monitors[key]
+      for (const key in monitorsRef.current) {
+        const monitor = monitorsRef.current[key]
         if (levels[monitor.id] != null) updated[monitor.key] = levels[monitor.id]
       }
       return updated
@@ -368,6 +383,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.addEventListener("warmthLevelsUpdated", (e) => recievedWarmthLevels(e))
     window.addEventListener("highlightLevelsUpdated", (e) => recievedHighlightLevels(e))
     window.addEventListener("colorToggleStateUpdated", (e) => recievedColorToggleState(e))
+    window.addEventListener("scheduleLockStateUpdated", (e) => recievedScheduleLockState(e))
     window.addEventListener("isRefreshing", (e) => handleIsRefreshingUpdate(e))
 
     if (window.isAppX === false) {
@@ -378,6 +394,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     window.requestSettings()
     window.requestMonitors()
     window.requestColorToggleState?.()
+    window.requestScheduleLockState?.()
     window.ipc.send('request-localization')
     window.reactReady = true
 
@@ -390,6 +407,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
       window.removeEventListener("warmthLevelsUpdated")
       window.removeEventListener("highlightLevelsUpdated")
       window.removeEventListener("colorToggleStateUpdated")
+      window.removeEventListener("scheduleLockStateUpdated")
       window.removeEventListener("isRefreshing")
       window.removeEventListener("updateProgress")
     }
@@ -426,7 +444,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
           const softwareDimMin = -(window.settings?.softwareDimMax ?? 100)
           return (
             <>
-              <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={linkedLevel} min={softwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
+              <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={linkedLevel} min={softwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" />
               {renderKelvinSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_COLOR_TEMPERATURE") })}
               {renderHighlightSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION") })}
             </>
@@ -528,7 +546,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                 const monSoftwareDimMin = -(window.settings?.softwareDimMax ?? 100)
                 return (
                   <div className="monitor-sliders" key={monitor.key}>
-                    <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} />
+                    <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" />
                     {renderKelvinSlider(monitor)}
                     {renderHighlightSlider(monitor)}
                   </div>
@@ -551,7 +569,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                       return (
                         <div className="feature-row feature-brightness">
                           <div className="feature-icon"><span className="icon vfix">&#xE706;</span></div>
-                          <Slider id={monitor.id} level={extLevel} min={extSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} />
+                          <Slider id={monitor.id} level={extLevel} min={extSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" />
                         </div>
                       )
                     })()}

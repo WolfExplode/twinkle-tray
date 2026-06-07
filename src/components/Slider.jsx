@@ -136,12 +136,14 @@ export default class Slider extends Component {
         const totalRange = max - min
         const zeroMarkPos = hasSoftwareDim ? ((-min) / totalRange * 100) + '%' : null
         const displayValue = this.state.editing ? this.state.inputValue : Math.floor(level)
+        const disabled = this.props.disabled === true
+        const lockedTitle = this.props.lockedTitle
         return (
-            <div className="monitor-item" onWheel={this.handleWheel}>
+            <div className="monitor-item" onWheel={disabled ? undefined : this.handleWheel} title={disabled && lockedTitle ? lockedTitle : undefined}>
                 {this.getName()}
-                <div className="input--range" data-height={this.props.height} data-software-dim={hasSoftwareDim && level < 0 ? "active" : undefined}>
+                <div className="input--range" data-height={this.props.height} data-software-dim={hasSoftwareDim && level < 0 ? "active" : undefined} data-locked={disabled || undefined}>
                     <div className="rangeGroup">
-                        <input type="range" min={min} max={max} value={level} data-percent={level + "%"} onChange={this.handleRangeChange} className="range" />
+                        <input type="range" min={min} max={max} value={level} data-percent={level + "%"} onChange={disabled ? undefined : this.handleRangeChange} className="range" disabled={disabled} />
                         {hasSoftwareDim ? (
                             <>
                                 <div className="progress progress-software-dim" style={this.softwareDimProgressStyle()}></div>
@@ -157,11 +159,12 @@ export default class Slider extends Component {
                         min={min}
                         max={max}
                         value={displayValue}
-                        onChange={this.handleNumberChange}
-                        onFocus={this.handleNumberFocus}
-                        onBlur={this.handleNumberBlur}
-                        onKeyDown={this.handleNumberKeyDown}
+                        onChange={disabled ? undefined : this.handleNumberChange}
+                        onFocus={disabled ? undefined : this.handleNumberFocus}
+                        onBlur={disabled ? undefined : this.handleNumberBlur}
+                        onKeyDown={disabled ? undefined : this.handleNumberKeyDown}
                         className="val"
+                        disabled={disabled}
                     />
                 </div>
             </div>

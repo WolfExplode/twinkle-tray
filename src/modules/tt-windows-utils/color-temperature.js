@@ -17,7 +17,7 @@ const whitepoints = [
 ]
 
 function getWhitePointForKelvin(temp) {
-  temp = Math.max(2000, Math.min(6500, temp))
+  temp = Math.max(3000, Math.min(6500, temp))
   const t = (temp - 1000) / 500
   const i = Math.floor(t)
   const ratio = t - i

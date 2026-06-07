@@ -693,7 +693,7 @@ export default class SettingsWindow extends PureComponent {
         const highlightEnabled = this.state.rawSettings?.adjustmentTimeHighlightCompressionEnabled
 
         const kelvinSlider = tempEnabled ? (
-            <Slider key={index + ".kelvin"} name="Color Temperature (K)" min={2000} max={6500} level={this.state.adjustmentTimes[index].kelvin ?? 6500} onChange={(value) => {
+            <Slider key={index + ".kelvin"} name="Color Temperature (K)" min={3000} max={6500} level={this.state.adjustmentTimes[index].kelvin ?? 6500} onChange={(value) => {
                 this.state.adjustmentTimes[index].kelvin = value
                 this.forceUpdate()
                 this.adjustmentTimesUpdated()
@@ -752,7 +752,7 @@ export default class SettingsWindow extends PureComponent {
                         <React.Fragment key={monitor.id}>
                             <Slider key={monitor.id + ".brightness"} min={softwareDimMin} max={100} name={getMonitorName(monitor, this.state.names)} onChange={(value) => { this.getAdjustmentTimesMonitorsChanged(index, monitor, value) }} level={level} scrolling={false} />
                             {tempEnabled ? (
-                                <Slider key={monitor.id + ".kelvin"} name={`${getMonitorName(monitor, this.state.names)} (K)`} min={2000} max={6500} level={kelvin} onChange={(value) => { this.getAdjustmentTimesKelvinChanged(index, monitor, value) }} scrolling={false} />
+                                <Slider key={monitor.id + ".kelvin"} name={`${getMonitorName(monitor, this.state.names)} (K)`} min={3000} max={6500} level={kelvin} onChange={(value) => { this.getAdjustmentTimesKelvinChanged(index, monitor, value) }} scrolling={false} />
                             ) : null}
                             {highlightEnabled ? (
                                 <Slider key={monitor.id + ".highlight"} name={`${getMonitorName(monitor, this.state.names)} (${T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION")})`} min={0} max={100} level={highlightWeight} onChange={(value) => { this.getAdjustmentTimesHighlightChanged(index, monitor, value) }} scrolling={false} />
@@ -1386,7 +1386,7 @@ export default class SettingsWindow extends PureComponent {
                                 <div className="pageSection">
                                     <div className="sectionTitle">{T.t("SETTINGS_TIME_TITLE")}</div>
                                     <p>{T.t("SETTINGS_TIME_DESC")}</p>
-                                    <SettingsOption title="Color Temperature" description="When enabled, each time adjustment can set a warm tint on your displays (6500K = daylight, 2000K = warm incandescent)." input={this.renderToggle("adjustmentTimeTemperatureEnabled")} />
+                                    <SettingsOption title="Color Temperature" description="When enabled, each time adjustment can set a warm tint on your displays (6500K = daylight, 3000K = warm)." input={this.renderToggle("adjustmentTimeTemperatureEnabled")} />
                                     <SettingsOption title={T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION")} description="When enabled, roll off bright highlights to reduce perceived dynamic range. Works best on SDR displays." input={this.renderToggle("adjustmentTimeHighlightCompressionEnabled")} />
                                     <SettingsOption title={T.t("SETTINGS_TIME_INDIVIDUAL_TITLE")} description={T.t("SETTINGS_TIME_INDIVIDUAL_DESC")} input={this.renderToggle("adjustmentTimeIndividualDisplays")} />
                                     <div className="adjustmentTimes">
@@ -1423,6 +1423,9 @@ export default class SettingsWindow extends PureComponent {
                                         </select>
                                     } />
                                     <SettingsOption title={T.t("SETTINGS_TIME_STARTUP_TITLE")} description={T.t("SETTINGS_TIME_STARTUP_DESC")} input={this.renderToggle("checkTimeAtStartup")} />
+                                    <SettingsOption title="Schedule refresh interval" description="How often (in seconds) the schedule is re-checked and applied. Lower = more responsive transitions; higher = less background work." input={
+                                        <input type="number" min="10" max="3600" step="10" value={window.settings.backgroundUpdateInterval ?? 60} onChange={(e) => this.setSetting("backgroundUpdateInterval", Math.max(10, Math.min(3600, e.target.value * 1)))} style={{ width: "70px" }} />
+                                    } />
                                 </div>
                                 <div className="pageSection">
                                     <div className="sectionTitle">{T.t("SETTINGS_TIME_IDLE_TITLE")}</div>

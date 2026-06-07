@@ -487,6 +487,7 @@ const defaultSettings = {
   adjustmentTimeLongitude: 0,
   adjustmentTimeLatitude: 0,
   checkTimeAtStartup: true,
+  backgroundUpdateInterval: 60,
   order: [],
   monitorFeatures: {},
   monitorFeaturesSettings: {},
@@ -809,6 +810,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       lastTimeEvent = false
       restartBackgroundUpdate()
       rebuildTray = true
+      sendScheduleLockState()
     }
 
     if (newSettings.adjustmentTimesActive !== undefined) {
@@ -817,8 +819,17 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         lastTimeEvent = false
         applyCurrentAdjustmentEvent(true, true)
         applyCurrentDisplayColorEffects(false)
+      } else {
+        // Schedule turned off: restore manual values or reset to neutral
+        for (const key in monitors) {
+          const id = monitors[key].id
+          const kelvin = manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
+          const highlightWeight = manualHighlightActive ? (manualHighlightLevels[id] ?? 0) : 0
+          updateDisplayColor(id, { kelvin, highlightWeight })
+        }
       }
       setTrayMenu()
+      sendScheduleLockState()
     }
 
     if (newSettings.adjustmentTimeTemperatureEnabled !== undefined) {
@@ -834,6 +845,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       }
       setTrayStatus()
       setTrayMenu()
+      sendScheduleLockState()
     }
 
     if (newSettings.adjustmentTimeHighlightCompressionEnabled !== undefined) {
@@ -849,6 +861,11 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       }
       setTrayStatus()
       setTrayMenu()
+      sendScheduleLockState()
+    }
+
+    if (newSettings.backgroundUpdateInterval !== undefined) {
+      restartBackgroundUpdate()
     }
 
     if (newSettings.hotkeys !== undefined) {
@@ -1818,7 +1835,7 @@ function getMonitorDisplayIndex(monitorId) {
 }
 
 function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
-  if (kelvin !== undefined) warmthLevels[monitorId] = kelvin
+  if (kelvin !== undefined) warmthLevels[monitorId] = Math.max(3000, Math.min(6500, kelvin))
   if (highlightWeight !== undefined) highlightLevels[monitorId] = highlightWeight
 
   if (isWindowsUserIdle) return
@@ -1847,6 +1864,7 @@ function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
 }
 
 function updateWarmth(monitorId, kelvin = 6500) {
+  kelvin = Math.max(3000, Math.min(6500, kelvin))
   manualWarmthLevels[monitorId] = kelvin
   if (manualTemperatureActive) {
     updateDisplayColor(monitorId, { kelvin })
@@ -1861,12 +1879,8 @@ function updateHighlightCompression(monitorId, weight = 0) {
 }
 
 function sendDisplayColorLevels() {
-  sendToAllWindows('warmth-levels-updated', manualWarmthLevels)
-  sendToAllWindows('highlight-levels-updated', manualHighlightLevels)
-}
-
-function sendWarmthLevels() {
-  sendDisplayColorLevels()
+  sendToAllWindows('warmth-levels-updated', warmthLevels)
+  sendToAllWindows('highlight-levels-updated', highlightLevels)
 }
 
 function hideDisplayColorEffects() {
@@ -2577,14 +2591,15 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
   }, settings.updateInterval * transitionIntervalMult)
 }
 
-function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}) {
+function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}, onlyMonitorIds = null) {
   for (let key in monitors) {
     const monitor = monitors[key]
+    if (onlyMonitorIds && !onlyMonitorIds.includes(monitor.id)) continue
     let normalized = level
     let dimLevel = softwareDimLevel
     let kelvin = warmthKelvin
     let highlight = highlightWeight
-    if (settings.adjustmentTimeIndividualDisplays) {
+    if (settings.adjustmentTimeIndividualDisplays || onlyMonitorIds) {
       normalized = (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
       dimLevel = (eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel)
       if (eventMonitorsKelvin[monitor.id] != null) {
@@ -2720,11 +2735,11 @@ ipcMain.on('update-highlight-compression', (event, { monitorId, weight }) => {
 })
 
 ipcMain.on('request-warmth-levels', () => {
-  sendWarmthLevels()
+  sendDisplayColorLevels()
 })
 
 ipcMain.on('request-highlight-levels', () => {
-  sendToAllWindows('highlight-levels-updated', highlightLevels)
+  sendDisplayColorLevels()
 })
 
 ipcMain.on('toggle-color-temperature', (event, openPanel = false) => {
@@ -2741,6 +2756,10 @@ ipcMain.on('toggle-time-adjustments', () => {
 
 ipcMain.on('request-color-toggle-state', () => {
   sendColorToggleState()
+})
+
+ipcMain.on('request-schedule-lock-state', () => {
+  sendScheduleLockState()
 })
 
 ipcMain.on('request-monitors', function (event, arg) {
@@ -3830,72 +3849,74 @@ function sendColorToggleState() {
   sendToAllWindows('color-toggle-state', { manualTemperatureActive, manualHighlightActive })
 }
 
+function sendScheduleLockState() {
+  sendToAllWindows('schedule-lock-state', {
+    brightness: settings.adjustmentTimesActive && settings.adjustmentTimes.length > 0,
+    temperature: settings.adjustmentTimesActive && settings.adjustmentTimeTemperatureEnabled,
+    highlight: settings.adjustmentTimesActive && settings.adjustmentTimeHighlightCompressionEnabled,
+  })
+}
+
 function toggleTimeAdjustments() {
   writeSettings({ adjustmentTimesActive: !settings.adjustmentTimesActive }, true, true)
 }
 
-function toggleColorTemperature(openPanel = false) {
-  const turningOn = !manualTemperatureActive
-  if (!turningOn) {
+function toggleColorEffect(type, openPanel = false) {
+  const isTemp = type === 'temperature'
+  const effectiveLevels = isTemp ? warmthLevels : highlightLevels
+  const manualLevels = isTemp ? manualWarmthLevels : manualHighlightLevels
+  const scheduleKey = isTemp ? 'adjustmentTimeTemperatureEnabled' : 'adjustmentTimeHighlightCompressionEnabled'
+  const scheduledProp = isTemp ? 'kelvin' : 'highlightWeight'
+  const defaultValue = isTemp ? 6500 : 0
+  const shouldPreserve = isTemp ? (v) => v != null && v < 6500 : (v) => v != null && v > 0
+  const applyManual = isTemp
+    ? (id, v) => updateWarmth(id, v)
+    : (id, v) => updateHighlightCompression(id, v)
+  const applyDisplay = isTemp
+    ? (id, v) => updateDisplayColor(id, { kelvin: v })
+    : (id, v) => updateDisplayColor(id, { highlightWeight: v })
+
+  const wasActive = isTemp ? manualTemperatureActive : manualHighlightActive
+  if (wasActive) {
+    // Preserve current effective value before turning off
     for (const key in monitors) {
       const id = monitors[key].id
-      const kelvin = warmthLevels[id] ?? manualWarmthLevels[id]
-      if (kelvin != null && kelvin < 6500) manualWarmthLevels[id] = kelvin
+      const val = effectiveLevels[id] ?? manualLevels[id]
+      if (shouldPreserve(val)) manualLevels[id] = val
     }
   }
-  manualTemperatureActive = !manualTemperatureActive
-  if (manualTemperatureActive) {
+
+  if (isTemp) manualTemperatureActive = !manualTemperatureActive
+  else manualHighlightActive = !manualHighlightActive
+  const nowActive = isTemp ? manualTemperatureActive : manualHighlightActive
+
+  if (nowActive) {
     for (const key in monitors) {
       const id = monitors[key].id
-      updateWarmth(id, manualWarmthLevels[id] ?? warmthLevels[id] ?? 6500)
+      applyManual(id, manualLevels[id] ?? effectiveLevels[id] ?? defaultValue)
     }
   } else {
-    const foundEvent = settings.adjustmentTimeTemperatureEnabled ? getCurrentAdjustmentEvent() : null
+    const foundEvent = settings[scheduleKey] ? getCurrentAdjustmentEvent() : null
     for (const key in monitors) {
       const monitor = monitors[key]
-      const updates = foundEvent ? getScheduledColorForMonitor(monitor, foundEvent) : { kelvin: 6500 }
-      if (!updates.kelvin) updates.kelvin = 6500
-      updateDisplayColor(monitor.id, { kelvin: updates.kelvin })
+      const updates = foundEvent ? getScheduledColorForMonitor(monitor, foundEvent) : {}
+      applyDisplay(monitor.id, updates[scheduledProp] ?? defaultValue)
     }
   }
   setTrayMenu()
   setTrayStatus()
   sendColorToggleState()
-  if (openPanel && manualTemperatureActive) {
+  if (openPanel && nowActive) {
     setTimeout(() => toggleTray(true), 100)
   }
 }
 
+function toggleColorTemperature(openPanel = false) {
+  toggleColorEffect('temperature', openPanel)
+}
+
 function toggleHighlightCompression(openPanel = false) {
-  const turningOn = !manualHighlightActive
-  if (!turningOn) {
-    for (const key in monitors) {
-      const id = monitors[key].id
-      const weight = highlightLevels[id] ?? manualHighlightLevels[id]
-      if (weight != null && weight > 0) manualHighlightLevels[id] = weight
-    }
-  }
-  manualHighlightActive = !manualHighlightActive
-  if (manualHighlightActive) {
-    for (const key in monitors) {
-      const id = monitors[key].id
-      updateHighlightCompression(id, manualHighlightLevels[id] ?? highlightLevels[id] ?? 0)
-    }
-  } else {
-    const foundEvent = settings.adjustmentTimeHighlightCompressionEnabled ? getCurrentAdjustmentEvent() : null
-    for (const key in monitors) {
-      const monitor = monitors[key]
-      const updates = foundEvent ? getScheduledColorForMonitor(monitor, foundEvent) : { highlightWeight: 0 }
-      if (updates.highlightWeight == null) updates.highlightWeight = 0
-      updateDisplayColor(monitor.id, { highlightWeight: updates.highlightWeight })
-    }
-  }
-  setTrayMenu()
-  setTrayStatus()
-  sendColorToggleState()
-  if (openPanel && manualHighlightActive) {
-    setTimeout(() => toggleTray(true), 100)
-  }
+  toggleColorEffect('highlight', openPanel)
 }
 
 function setTrayStatus() {
@@ -4580,7 +4601,7 @@ function restartBackgroundUpdate() {
     restartBackgroundUpdateThrottle = setTimeout(() => {
       restartBackgroundUpdateThrottle = false
       clearInterval(backgroundInterval)
-      backgroundInterval = setInterval(() => handleBackgroundUpdate(), (isDev ? 8000 : 60000 * 1))
+      backgroundInterval = setInterval(() => handleBackgroundUpdate(), isDev ? 8000 : (settings.backgroundUpdateInterval ?? 60) * 1000)
       handleBackgroundUpdate()
     }, 3000)
   } else {
@@ -4733,6 +4754,18 @@ function idleCheckShort() {
           if (!foundEvent && !settings.disableAutoApply) setKnownBrightness(false)
         }
 
+        // Clear inactive dim state so all monitors get a fresh timeout window after
+        // returning from idle. Also clear any software dim overlays that were active
+        // from inactive dimming before idle kicked in.
+        if (settings.monitorFocusEnabled) {
+          for (const monitorId of monitorFocusDimmed) {
+            updateSoftwareDim(monitorId, 0)
+          }
+          monitorLastVisited = {}
+          monitorPreDimBrightness = {}
+          monitorFocusDimmed = new Set()
+        }
+
         block.release()
 
       }, parseInt(settings.idleRestoreSeconds || 4) * 1000)
@@ -4751,6 +4784,13 @@ let monitorLastVisited = {}
 let monitorPreDimBrightness = {}
 let monitorFocusDimmed = new Set()
 let electronToMonitorMap = {}
+
+// Priority brightness system:
+// Windows asleep > Idle dim > Inactive monitor dim > Schedule > Manual
+// scheduledBrightness tracks what the schedule intends for each monitor,
+// including monitors that are currently inactive-dimmed, so restoration
+// always reflects the current schedule rather than a stale saved value.
+const scheduledBrightness = {} // { [monitorId]: { brightness, softwareDim } }
 
 function buildElectronMonitorMap() {
   electronToMonitorMap = {}
@@ -4798,15 +4838,24 @@ function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDi
     { [monitor.id]: targetSoftwareDim },
     6500,
     {},
+    0,
+    {},
     [monitor.id]
   )
 }
 
 function restoreMonitorFocusBrightness(monitor) {
   if (!monitor || !monitorFocusDimmed.has(monitor.id)) return false
-  const savedLevel = monitorPreDimBrightness[monitor.id]
-  if (savedLevel !== undefined) {
-    applyMonitorFocusTransition(monitor, savedLevel, 0)
+
+  // Prefer the schedule's current intended value so we land on the right brightness
+  // even if the schedule changed while this monitor was inactive-dimmed.
+  // Fall back to the brightness saved just before dimming started.
+  const scheduled = settings.adjustmentTimesActive && !tempSettings.pauseTimeAdjustments && scheduledBrightness[monitor.id]
+  const targetBrightness = scheduled ? scheduled.brightness : monitorPreDimBrightness[monitor.id]
+  const targetSoftwareDim = scheduled ? scheduled.softwareDim : 0
+
+  if (targetBrightness !== undefined) {
+    applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDim)
     console.log(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
   } else {
     updateSoftwareDim(monitor.id, 0)
@@ -5075,10 +5124,30 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           const eventMonitorsKelvin = foundEvent.monitorsKelvin ?? {}
           const eventHighlightWeight = foundEvent.highlightWeight ?? 0
           const eventMonitorsHighlightWeight = foundEvent.monitorsHighlightWeight ?? {}
+          const eventMonitors = foundEvent.monitors ?? {}
+
+          // Track schedule's intended brightness for every monitor, including inactive-dimmed ones,
+          // so restoring an inactive-dimmed monitor always lands on the current schedule value.
+          for (const monitor of Object.values(monitors)) {
+            const brightness = (settings.adjustmentTimeIndividualDisplays && eventMonitors[monitor.id] >= 0)
+              ? eventMonitors[monitor.id]
+              : (foundEvent.brightness ?? 50)
+            const softwareDim = (settings.adjustmentTimeIndividualDisplays && eventMonitorsSoftwareDim[monitor.id] >= 0)
+              ? eventMonitorsSoftwareDim[monitor.id]
+              : eventSoftwareDim
+            scheduledBrightness[monitor.id] = { brightness, softwareDim }
+          }
+
+          // Skip monitors that are currently inactive-dimmed — they will pick up the new
+          // schedule value when the user moves their cursor back to them.
+          const onlyMonitorIds = monitorFocusDimmed.size > 0
+            ? Object.values(monitors).map(m => m.id).filter(id => !monitorFocusDimmed.has(id))
+            : null
+
           if (instant || settings.adjustmentTimeSpeed === "instant") {
-            transitionlessBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight)
+            transitionlessBrightness(foundEvent.brightness, eventMonitors, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight, onlyMonitorIds)
           } else {
-            transitionBrightness(foundEvent.brightness, (foundEvent.monitors ? foundEvent.monitors : {}), 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight)
+            transitionBrightness(foundEvent.brightness, eventMonitors, 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight, onlyMonitorIds)
           }
         })
         setTrayStatus()

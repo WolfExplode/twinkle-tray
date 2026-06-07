@@ -317,6 +317,12 @@ ipc.on('color-toggle-state', (event, state) => {
     }))
 })
 
+ipc.on('schedule-lock-state', (event, lockState) => {
+    window.dispatchEvent(new CustomEvent('scheduleLockStateUpdated', {
+        detail: lockState
+    }))
+})
+
 // Localization recieved
 ipc.on('localization-updated', (event, localization) => {
     window.dispatchEvent(new CustomEvent('localizationUpdated', {
@@ -496,6 +502,7 @@ window.toggleColorTemperature = (openPanel = false) => ipc.send('toggle-color-te
 window.toggleHighlightCompression = (openPanel = false) => ipc.send('toggle-highlight-compression', openPanel)
 window.toggleTimeAdjustments = () => ipc.send('toggle-time-adjustments')
 window.requestColorToggleState = () => ipc.send('request-color-toggle-state')
+window.requestScheduleLockState = () => ipc.send('request-schedule-lock-state')
 window.allMonitors = []
 window.lastUpdate = Date.now()
 window.showPanel = false

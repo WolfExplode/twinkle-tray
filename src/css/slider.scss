@@ -205,6 +205,41 @@
     opacity: 0.35;
 }
 
+.input--range[data-locked] {
+    cursor: not-allowed;
+
+    .range {
+        pointer-events: none;
+
+        &::-webkit-slider-thumb {
+            background: var(--slider-track-color);
+        }
+    }
+
+    .progress,
+    .progress-hardware {
+        background: var(--slider-track-color);
+        opacity: 0.6;
+    }
+
+    .val {
+        pointer-events: none;
+        opacity: 0.55;
+    }
+}
+
+body[data-is-win11="true"]:not(.ignoreWin11) .input--range[data-locked] {
+    .range::-webkit-slider-thumb {
+        background-color: var(--slider-track-color);
+        box-shadow: 0 0 0 4px var(--slider-thumb-border), 0 0.5px 3px 0 rgba(0, 0, 0, 0.3);
+    }
+
+    .progress,
+    .progress-hardware {
+        background-color: var(--slider-track-color);
+    }
+}
+
 // Sun Valley tweaks
 #root[data-fluent-icons="true"] {
 
