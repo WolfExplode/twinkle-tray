@@ -1472,9 +1472,15 @@ export default class SettingsWindow extends PureComponent {
                                     <div className="sectionTitle">{T.t("SETTINGS_TIME_MONITOR_FOCUS_TITLE")}</div>
                                     <SettingsOption title={T.t("SETTINGS_TIME_MONITOR_FOCUS_TITLE")} description={T.t("SETTINGS_TIME_MONITOR_FOCUS_DESC")} input={this.renderToggle("monitorFocusEnabled")}>
                                         <SettingsChild content={
-                                            <div>
-                                                <label style={{ "textTransform": "capitalize" }}>{T.t("GENERIC_MINUTES")}</label>
-                                                <input type="number" min="1" max="600" value={window.settings.monitorFocusMinutes * 1} onChange={(e) => this.setSetting("monitorFocusMinutes", e.target.value)} />
+                                            <div style={{ "display": "flex" }}>
+                                                <div style={{ "marginRight": "6px" }}>
+                                                    <label style={{ "textTransform": "capitalize" }}>{T.t("GENERIC_MINUTES")}</label>
+                                                    <input type="number" min="0" max="600" value={window.settings.monitorFocusMinutes * 1} onChange={(e) => this.setSetting("monitorFocusMinutes", e.target.value)} />
+                                                </div>
+                                                <div>
+                                                    <label style={{ "textTransform": "capitalize" }}>{T.t("GENERIC_SECONDS")}</label>
+                                                    <input type="number" min="0" max="600" value={window.settings.monitorFocusSeconds * 1} onChange={(e) => this.setSetting("monitorFocusSeconds", e.target.value)} />
+                                                </div>
                                             </div>
                                         } />
                                     </SettingsOption>
@@ -1498,6 +1504,14 @@ export default class SettingsWindow extends PureComponent {
                                                 height={"short"}
                                                 icon={false}
                                             />
+                                        } />
+                                    </SettingsOption>
+                                    <SettingsOption title="Dim transition" description="How long the dim animation takes.">
+                                        <SettingsChild content={
+                                            <div>
+                                                <label style={{ "textTransform": "capitalize" }}>{T.t("GENERIC_SECONDS")}</label>
+                                                <input type="number" min="0" max="10" step="0.5" value={(window.settings.monitorFocusTransitionDuration ?? 1000) / 1000} onChange={(e) => this.setSetting("monitorFocusTransitionDuration", Math.round(parseFloat(e.target.value) * 1000))} />
+                                            </div>
                                         } />
                                     </SettingsOption>
                                 </div>

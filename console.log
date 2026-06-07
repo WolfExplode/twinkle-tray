@@ -1,0 +1,21 @@
+
+> twinkle-tray@1.17.2 start
+> electron . --dev
+
+C:\Users\WXP\Documents\GitHub\twinkle-tray\src\electron.js:6
+let isDev = app.commandLine.hasSwitch("dev")
+                ^
+
+TypeError: Cannot read properties of undefined (reading 'commandLine')
+    at Object.<anonymous> (C:\Users\WXP\Documents\GitHub\twinkle-tray\src\electron.js:6:17)
+    at Module._compile (node:internal/modules/cjs/loader:1714:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1848:10)
+    at Module.load (node:internal/modules/cjs/loader:1448:32)
+    at Module._load (node:internal/modules/cjs/loader:1270:12)
+    at c._load (node:electron/js2c/node_init:2:17993)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:244:24)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:186:5)
+    at node:internal/main/run_main_module:36:49
+
+Node.js v22.21.1
