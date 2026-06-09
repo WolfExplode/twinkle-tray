@@ -2537,7 +2537,7 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
   // Speed up transition
   let stepSpeedMult = 1
   switch (settings.adjustmentTimeSpeed) {
-    case "fast": stepSpeedMult = 3; break;
+    case "faster": stepSpeedMult = 3; break;
     case "fastest": stepSpeedMult = 6; break;
     default: stepSpeedMult = 1; break;
   }
@@ -5085,10 +5085,11 @@ function getCurrentAdjustmentEventLERP() {
     if (!current || !next) return false;
 
     const date = new Date()
-    const nowValue = (date.getHours() * 60) + (date.getMinutes() * 1)
+    let nowValue = (date.getHours() * 60) + (date.getMinutes() * 1)
 
     if (current.value > next.value) {
       next.value += 1440 // Add 24hr if next event is tomorrow
+      if (nowValue < current.value) nowValue += 1440 // Also adjust now if we've crossed midnight
     }
 
     // Calculate 0-1 percentage of progress
@@ -5104,7 +5105,7 @@ function getCurrentAdjustmentEventLERP() {
     // Generate result depending on if displays are linked
     if (settings.adjustmentTimeIndividualDisplays) {
       const keys = Object.keys(next.monitors)
-      const monitors = Object.assign(current.monitors)
+      const monitors = Object.assign({}, current.monitors)
       keys.forEach(key => {
         if (monitors[key] > -1) {
           monitors[key] = Math.round(Utils.lerp(current.monitors[key], next.monitors[key], lerpValues.percent))
@@ -5123,7 +5124,7 @@ function getCurrentAdjustmentEventLERP() {
 function getSunCalcTime(timeName = "solarNoon") {
   const localTimes = SunCalc.getTimes(new Date(), settings.adjustmentTimeLatitude, settings.adjustmentTimeLongitude)
   const time = new Date(localTimes[timeName])
-  return `${time.getHours()}:${time.getMinutes()}`
+  return `${time.getHours()}:${time.getMinutes().toString().padStart(2, '0')}`
 }
 
 function getSunCalcTimes() {
