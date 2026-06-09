@@ -822,6 +822,10 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       restartBackgroundUpdate()
       rebuildTray = true
       sendScheduleLockState()
+      if (settings.adjustmentTimesActive) {
+        applyCurrentAdjustmentEvent(true, false)
+        applyCurrentDisplayColorEffects(false)
+      }
     }
 
     if (newSettings.adjustmentTimesActive !== undefined) {
@@ -5169,7 +5173,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
         lastTimeEvent = Object.assign({}, foundEvent)
         lastTimeEvent.day = new Date().getDate()
 
-        refreshMonitors().then(() => {
+        const applyFoundEvent = () => {
           const eventSoftwareDim = foundEvent.softwareDim ?? 0
           const eventMonitorsSoftwareDim = foundEvent.monitorsSoftwareDim ?? {}
           const eventKelvin = foundEvent.kelvin ?? 6500
@@ -5203,7 +5207,15 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           } else {
             transitionBrightness(foundEvent.brightness, eventMonitors, 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight, onlyMonitorIds)
           }
-        })
+        }
+
+        // If monitors are already known, apply immediately (same as color effects).
+        // Only fall back to a hardware refresh on first run when monitors aren't populated yet.
+        if (Object.keys(monitors).length > 0) {
+          applyFoundEvent()
+        } else {
+          refreshMonitors().then(applyFoundEvent)
+        }
         setTrayStatus()
         return foundEvent
       }

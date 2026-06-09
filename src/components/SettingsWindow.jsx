@@ -1233,7 +1233,7 @@ export default class SettingsWindow extends PureComponent {
     adjustmentTimesUpdated = () => {
         this.setState({ adjustmentTimes: this.state.adjustmentTimes.slice(0) })
         this.sendSettingsThrottle({ adjustmentTimes: this.state.adjustmentTimes.slice(0) })
-        //window.sendSettings({ adjustmentTimes: this.state.adjustmentTimes })
+        window.sendSettings({ adjustmentTimes: this.state.adjustmentTimes })
     }
 
     setSetting = (setting, sentVal) => {
