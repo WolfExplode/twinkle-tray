@@ -823,7 +823,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       rebuildTray = true
       sendScheduleLockState()
       if (settings.adjustmentTimesActive) {
-        applyCurrentAdjustmentEvent(true, false)
+        applyCurrentAdjustmentEvent(true, true)
         applyCurrentDisplayColorEffects(false)
       }
     }
@@ -1765,6 +1765,12 @@ function getSoftwareDimDisplayBounds(monitorId) {
 function updateSoftwareDim(monitorId, level) {
   level = Math.max(0, Math.min(100, level))
   softwareDimLevels[monitorId] = level
+  for (const key in monitors) {
+    if (monitors[key].id === monitorId) {
+      monitors[key].softwareDim = level
+      break
+    }
+  }
 
   if (isWindowsUserIdle) return
 
@@ -3945,7 +3951,8 @@ function setTrayStatus() {
       for (let key in monitors) {
         if (monitors[key].type === "ddcci" || monitors[key].type === "wmi") {
           i++
-          averagePerc += monitors[key].brightness
+          const dim = monitors[key].softwareDim ?? 0
+          averagePerc += (dim > 0 && monitors[key].brightness === 0) ? -dim : monitors[key].brightness
         }
       }
       let tooltip = 'Twinkle Tray' + (isDev ? " (Dev)" : "")

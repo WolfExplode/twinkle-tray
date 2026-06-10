@@ -219,11 +219,17 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     // Reset panel height so it's recalculated
     panelHeight = -1
 
-    // If hardware brightness came back above 0, clear any software dim for that monitor
+    // Sync software dim state from monitor data (electron.js is the source of truth)
     setSoftwareDim(prev => {
       const updated = { ...prev }
       let changed = false
       for (const key in newMonitors) {
+        const incomingDim = newMonitors[key].softwareDim ?? 0
+        if (incomingDim !== (updated[key] ?? 0)) {
+          updated[key] = incomingDim
+          changed = true
+        }
+        // If hardware brightness came back above 0, also clear any dim
         if (newMonitors[key].brightness > 0 && updated[key] > 0) {
           updated[key] = 0
           window.updateSoftwareDim(newMonitors[key].id, 0)
