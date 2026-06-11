@@ -470,6 +470,14 @@ body[data-is-win11="false"] #root {
     }
 }
 
+.linked-diverged {
+    margin-top: -6px;
+    opacity: 0.7;
+    .monitor-sliders {
+        margin-top: 0;
+    }
+}
+
 .feature-row.large .feature-icon {
     font-size: 32px;
 }

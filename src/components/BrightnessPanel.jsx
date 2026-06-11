@@ -435,12 +435,17 @@ const BrightnessPanel = memo(function BrightnessPanel() {
       return (<div className="no-displays-message">{T.t("GENERIC_NO_COMPATIBLE_DISPLAYS")}</div>)
     } else {
       if (state.linkedLevelsActive) {
-        // Combine all monitors
+        // Combine all monitors — prefer one that is not inactive-dimmed so the
+        // slider shows the intended brightness, not the dim level.
         let lastValidMonitor
+        const validMonitors = []
         for(const key in state.monitors) {
           const monitor = state.monitors[key]
           if(monitor.type == "wmi" || monitor.type == "studio-display" || (monitor.type == "ddcci" && monitor.brightnessType) || monitor.hdr === "active") {
-           lastValidMonitor = monitor 
+            if (window.settings?.hideDisplays?.[monitor.key] !== true) {
+              validMonitors.push(monitor)
+              if (!lastValidMonitor || !monitor.inactiveDimmed) lastValidMonitor = monitor
+            }
           }
         }
         if (lastValidMonitor) {
@@ -448,11 +453,32 @@ const BrightnessPanel = memo(function BrightnessPanel() {
           const linkedDim = softwareDim[monitor.key] ?? 0
           const linkedLevel = (linkedDim > 0 && monitor.brightness === 0) ? -linkedDim : monitor.brightness
           const softwareDimMin = -(window.settings?.softwareDimMax ?? 100)
+
+          // Show individual sliders for any monitor whose brightness diverges from the linked level
+          const divergedMonitors = validMonitors.length > 1 ? validMonitors.filter(m => {
+            const mDim = softwareDim[m.key] ?? 0
+            const mLevel = (mDim > 0 && m.brightness === 0) ? -mDim : m.brightness
+            return mLevel !== linkedLevel
+          }) : []
+
           return (
             <>
               <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={linkedLevel} min={softwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" />
               {renderKelvinSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_COLOR_TEMPERATURE") })}
               {renderHighlightSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION") })}
+              {divergedMonitors.length > 0 && (
+                <div className="linked-diverged">
+                  {divergedMonitors.map(m => {
+                    const mDim = softwareDim[m.key] ?? 0
+                    const mLevel = (mDim > 0 && m.brightness === 0) ? -mDim : m.brightness
+                    return (
+                      <div className="monitor-sliders" key={m.key}>
+                        <Slider name={getMonitorName(m, state.names)} id={m.id} level={mLevel} min={softwareDimMin} max={100} num={m.num} monitortype={m.type} hwid={m.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" />
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </>
           )
         }

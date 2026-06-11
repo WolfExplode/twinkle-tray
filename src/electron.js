@@ -176,6 +176,7 @@ function startMonitorThread() {
   if((monitorsThreadReal?.connected && monitorsThreadReal?.exitCode === null) || monitorsThreadStarting || isWindowsUserIdle) return false;
   monitorsThreadReady = false
   monitorsThreadStarting = true
+  monitorsThreadFailed = false
   console.log("Starting monitor thread")
   const skipTest = (settings.preferredDDCCIMethod == "auto" ? false : true)
   monitorsThreadReal = fork(path.join(__dirname, 'Monitors.js'), ["--isdev=" + isDev, "--apppath=" + app.getAppPath(), "--skiptest=" + skipTest], { silent: false })
@@ -833,9 +834,12 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       if (settings.adjustmentTimesActive) {
         lastTimeEvent = false
         applyCurrentAdjustmentEvent(true, true)
+        // Overwrite saved manual brightness with the schedule values so toggling
+        // the schedule back off leaves brightness unchanged.
+        updateKnownDisplays(true, true)
         applyCurrentDisplayColorEffects(false)
       } else {
-        // Schedule turned off: restore manual values or reset to neutral
+        // Schedule turned off: brightness stays at schedule values (already saved above)
         for (const key in monitors) {
           const id = monitors[key].id
           const kelvin = manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
@@ -3469,8 +3473,17 @@ function showPanel(show = true, height = 300) {
       startPanelAnimation()
     } else {
       // No blur, or CSS Animation
-      tryVibrancy(mainWindow, false)
-      mainWindow.setBackgroundColor("#00000000")
+      if (settings.useAcrylic) {
+        // Apply acrylic immediately so the window already has blur when it appears.
+        if (lastTheme && lastTheme.ColorPrevalence) {
+          tryVibrancy(mainWindow, { theme: getAccentColors().dark + "D0", effect: "acrylic" })
+        } else {
+          tryVibrancy(mainWindow, { theme: (lastTheme && lastTheme.SystemUsesLightTheme ? "#DBDBDBDD" : "#292929DD"), effect: "acrylic" })
+        }
+      } else {
+        tryVibrancy(mainWindow, false)
+        mainWindow.setBackgroundColor("#00000000")
+      }
       if (panelSize.taskbar.position === "TOP") {
         // Top
         setWindowPos(mainWindowHandle, -2, panelSize.bounds.x * primaryDPI, ((panelSize.base) * primaryDPI), panelSize.bounds.width * primaryDPI, panelHeight, 0x0400)
@@ -4592,7 +4605,7 @@ function handleMetricsChange(type) {
 
 // Monitor system power/lock state to avoid accidentally tripping the WMI auto-disabler
 let recentlyWokeUp = false
-powerMonitor.on("suspend", () => { console.log("Event: suspend"); recentlyWokeUp = true })
+powerMonitor.on("suspend", () => { console.log("Event: suspend"); recentlyWokeUp = true; stopMonitorThread() })
 powerMonitor.on("lock-screen", () => {
   console.log("Event: lock-screen");
   if (settings.disableOnLockScreen) recentlyWokeUp = true
@@ -4856,9 +4869,6 @@ function stopMonitorFocusTransition() {
   }
 }
 
-function easeInOutCubic(t) {
-  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
-}
 
 function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDim = 0) {
   stopMonitorFocusTransition()
@@ -4874,9 +4884,8 @@ function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDi
   monitorFocusTransition = setInterval(() => {
     const elapsed = Date.now() - startTime
     const progress = Math.min(1, elapsed / durationMs)
-    const eased = easeInOutCubic(progress)
-    const currentBrightness = Math.round(startBrightness + (targetBrightness - startBrightness) * eased)
-    const currentSoftwareDim = startSoftwareDim + (targetSoftwareDim - startSoftwareDim) * eased
+    const currentBrightness = Math.round(startBrightness + (targetBrightness - startBrightness) * progress)
+    const currentSoftwareDim = startSoftwareDim + (targetSoftwareDim - startSoftwareDim) * progress
     let uiUpdated = false
 
     if (currentBrightness !== lastSentBrightness) {
@@ -4921,7 +4930,9 @@ function restoreMonitorFocusBrightness(monitor) {
   }
   updateSoftwareDim(monitor.id, targetSoftwareDim)
   monitorFocusDimmed.delete(monitor.id)
+  delete monitor.inactiveDimmed
   delete monitorPreDimBrightness[monitor.id]
+  sendToAllWindows('monitors-updated', monitors)
   return true
 }
 
@@ -4968,6 +4979,7 @@ function checkMonitorFocus() {
     if (now - lastVisited >= timeout) {
       monitorPreDimBrightness[monitor.id] = monitor.brightness
       monitorFocusDimmed.add(monitor.id)
+      monitor.inactiveDimmed = true
       applyMonitorFocusTransition(monitor, settings.monitorFocusDimLevel ?? 0, settings.monitorFocusSoftwareDim ?? 0)
       console.log(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
     }
@@ -5002,8 +5014,9 @@ function resetMonitorFocusState() {
   for (const monitorId of monitorFocusDimmed) {
     const monitor = Object.values(monitors || {}).find(m => m.id === monitorId)
     const savedLevel = monitorPreDimBrightness[monitorId]
-    if (monitor && savedLevel !== undefined) {
-      updateBrightness(monitorId, savedLevel, true, "brightness")
+    if (monitor) {
+      if (savedLevel !== undefined) updateBrightness(monitorId, savedLevel, true, "brightness")
+      delete monitor.inactiveDimmed
     }
     updateSoftwareDim(monitorId, 0)
   }
