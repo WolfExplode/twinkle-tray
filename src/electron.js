@@ -5035,27 +5035,42 @@ function getCurrentAdjustmentEvent() {
 
   // Find most recent event
   let foundEvent = false
+  let latestEvent = false // Last event of the day, used to wrap around midnight
   try {
     for (let event of settings.adjustmentTimes) {
       const eventTime = (event.useSunCalc ? getSunCalcTime(event.sunCalc) : event.time)
       const eventValue = Utils.parseTime(eventTime)
 
+      const clone = () => {
+        const e = Object.assign({}, event)
+        e.monitors = Object.assign({}, event.monitors)
+        e.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
+        e.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
+        e.monitorsHighlightWeight = Object.assign({}, event.monitorsHighlightWeight)
+        e.value = eventValue
+        return e
+      }
+
       // Check if event is not later than current time, last event time, or last found time
       if (eventValue <= nowValue) {
         // Check if found event is greater than last found event
         if (foundEvent === false || foundEvent.value <= eventValue) {
-          foundEvent = Object.assign({}, event)
-          foundEvent.monitors = Object.assign({}, event.monitors)
-          foundEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
-          foundEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
-          foundEvent.monitorsHighlightWeight = Object.assign({}, event.monitorsHighlightWeight)
-          foundEvent.value = eventValue
+          foundEvent = clone()
         }
+      }
+
+      // Track the latest event of the day for the midnight wrap-around fallback
+      if (latestEvent === false || latestEvent.value <= eventValue) {
+        latestEvent = clone()
       }
     }
   } catch (e) {
     console.log("Error getting adjustment times!", e)
   }
+
+  // If no event has occurred yet today (now is before the first event), the active
+  // event is the last one from yesterday, which is still in effect overnight.
+  if (foundEvent === false) return latestEvent
 
   return foundEvent
 }
@@ -5177,7 +5192,9 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
     // Find most recent event
     const foundEvent = getCurrentAdjustmentEvent()
     if (foundEvent) {
-      if (lastTimeEvent == false || lastTimeEvent.value < foundEvent.value) {
+      // Use !== (not <) so transitions that decrease in value (e.g. crossing
+      // midnight from a 22:00 event to a 07:00 event) still apply.
+      if (lastTimeEvent == false || lastTimeEvent.value !== foundEvent.value) {
 
         if (settings.adjustmentTimeAnimate) {
           // If LERPing, override foundEvent with interpolated value
