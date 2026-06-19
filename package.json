@@ -69,6 +69,7 @@
       "src/intro-preload.js",
       "src/monitor-rules.json",
       "src/localization/*",
+      "src/adjustmentTimes.js",
       "src/Utils.js",
       "src/Monitors.js",
       "src/wmi-bridge-test.js",

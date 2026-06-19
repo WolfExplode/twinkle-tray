@@ -4537,13 +4537,18 @@ function handleMonitorChange(t, e, d) {
 
 }
 
+// Monitor system power/lock state to avoid accidentally tripping the WMI auto-disabler
+let recentlyWokeUp = false
+
 // Handle resume from sleep/hibernation
 powerMonitor.on("resume", () => {
   console.log("Resuming......")
   stopMonitorThread()
   const block = blockBadDisplays("powerMonitor:resume")
   setRecentlyInteracted(false)
-  
+  recentlyWokeUp = true
+  setTimeout(() => { recentlyWokeUp = false }, 15000)
+
   if(settings.restartOnWake) {
   // Screw it, just restart the whole app.
     tray.destroy()
@@ -4557,12 +4562,16 @@ powerMonitor.on("resume", () => {
       setTimeout(
         () => {
           block.release()
+
+          // Always apply schedule on wake regardless of disableAutoRefresh
+          applyCurrentAdjustmentEvent(true, false)
+
           if (!settings.disableAutoRefresh) refreshMonitors(true).then(() => {
             if (!settings.disableAutoApply && !hasRecentlyInteracted) setKnownBrightness();
             if(settings.recreateTray) recreateTray();
             if(settings.recreateFlyout && !panelSize.visible) restartPanel();
-    
-            // Check if time adjustments should apply
+
+            // Re-apply after refresh in case monitors weren't enumerated at first apply
             applyCurrentAdjustmentEvent(true, false)
           })
         },
@@ -4608,8 +4617,6 @@ function handleMetricsChange(type) {
 }
 
 
-// Monitor system power/lock state to avoid accidentally tripping the WMI auto-disabler
-let recentlyWokeUp = false
 powerMonitor.on("suspend", () => { console.log("Event: suspend"); recentlyWokeUp = true; stopMonitorThread() })
 powerMonitor.on("lock-screen", () => {
   console.log("Event: lock-screen");
@@ -4626,16 +4633,7 @@ powerMonitor.on("unlock-screen", () => {
     )
   }
 })
-powerMonitor.on("resume", () => {
-  console.log("Event: resume");
-  recentlyWokeUp = true
-  if (!settings.disableAutoRefresh) handleMetricsChange("resume");
-  setTimeout(() => {
-    recentlyWokeUp = false
-  },
-    15000
-  )
-})
+// recentlyWokeUp tracking and schedule updates on resume are handled by the main resume handler above
 
 
 let restartBackgroundUpdateThrottle = false
