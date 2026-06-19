@@ -19,6 +19,7 @@
     "appx-arm64": "npm run parcel-build && electron-builder --arm64 -w appx -c.extraMetadata.name=twinkle-tray-appx -c.win.artifactName=\"${productName} v${version}-store-arm64.${ext}\"",
     "build": "npm ci & npm run parcel-build && npm run electron-build",
     "build-all": "npm run build && npm run appx && npm run appx-arm64",
+    "test": "node --test \"test/**/*.test.js\"",
     "test-wmibridge": "node src/modules/wmi-bridge/example.js"
   },
   "keywords": [

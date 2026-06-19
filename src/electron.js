@@ -18,6 +18,7 @@ const isAppX = (app.name == "twinkle-tray-appx" ? true : false)
 const isPortable = (app.name == "twinkle-tray-portable" ? true : false)
 
 const Utils = require("./Utils")
+const AdjustmentTimes = require("./adjustmentTimes")
 
 const configFilesDir = (isPortable ? path.join(__dirname, "../../config/") : app.getPath("userData"))
 const settingsPath = path.join(configFilesDir, `\\settings${(isDev ? "-dev" : "")}.json`)
@@ -3654,6 +3655,10 @@ if(isDev) {
 }
 
 app.on("ready", async () => {
+  screen.on("display-added", invalidateDisplayCache)
+  screen.on("display-removed", invalidateDisplayCache)
+  screen.on("display-metrics-changed", invalidateDisplayCache)
+
   await getAllLanguages()
   await getThemeRegistry()
   //readSettings()
@@ -4822,6 +4827,12 @@ let monitorLastVisited = {}
 let monitorPreDimBrightness = {}
 let monitorFocusDimmed = new Set()
 let electronToMonitorMap = {}
+let cachedElectronDisplays = null
+
+function invalidateDisplayCache() {
+  cachedElectronDisplays = null
+  if (settings.monitorFocusEnabled) buildElectronMonitorMap()
+}
 
 // Priority brightness system:
 // Windows asleep > Idle dim > Inactive monitor dim > Schedule > Manual
@@ -4832,7 +4843,7 @@ const scheduledBrightness = {} // { [monitorId]: { brightness, softwareDim } }
 
 function buildElectronMonitorMap() {
   electronToMonitorMap = {}
-  const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
+  const displays = (cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays())).slice().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
   const trayMonitors = Object.values(monitors || {})
     .filter(m => m.bounds?.position !== undefined)
     .sort((a, b) => a.bounds.position.x - b.bounds.position.x || a.bounds.position.y - b.bounds.position.y)
@@ -4845,7 +4856,7 @@ function buildElectronMonitorMap() {
 }
 
 function getActiveMonitorFromPoint(x, y) {
-  const displays = screen.getAllDisplays()
+  const displays = cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays())
   const activeDisplay = displays.find(d =>
     x >= d.bounds.x && x < d.bounds.x + d.bounds.width &&
     y >= d.bounds.y && y < d.bounds.y + d.bounds.height
@@ -4874,23 +4885,27 @@ function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDi
   stopMonitorFocusTransition()
 
   const TICK_MS = 16
+  const DDC_THROTTLE_MS = 50
   const durationMs = Math.max(100, settings.monitorFocusTransitionDuration ?? 1000)
   const startBrightness = monitor.brightness
   const startSoftwareDim = softwareDimLevels[monitor.id] || 0
   const startTime = Date.now()
   let lastSentBrightness = startBrightness
   let lastSentSoftwareDim = startSoftwareDim
+  let lastDDCWrite = 0
 
   monitorFocusTransition = setInterval(() => {
     const elapsed = Date.now() - startTime
+    const now = startTime + elapsed
     const progress = Math.min(1, elapsed / durationMs)
     const currentBrightness = Math.round(startBrightness + (targetBrightness - startBrightness) * progress)
     const currentSoftwareDim = startSoftwareDim + (targetSoftwareDim - startSoftwareDim) * progress
     let uiUpdated = false
 
-    if (currentBrightness !== lastSentBrightness) {
+    if (currentBrightness !== lastSentBrightness && now - lastDDCWrite >= DDC_THROTTLE_MS) {
       updateBrightness(monitor.id, currentBrightness, true, "brightness", false)
       lastSentBrightness = currentBrightness
+      lastDDCWrite = now
       uiUpdated = true
     }
 
@@ -4941,10 +4956,13 @@ function handleMonitorFocusMouseMove(x, y) {
   if (!settings.monitorFocusEnabled || !monitors || userIdleDimmed || isWindowsUserIdle) return
   if (tempSettings.pauseIdleDetection) return
 
+  const now = Date.now()
+
+  // Skip lookup entirely if debounce hasn't expired and no monitors need restoring
+  if (monitorFocusDimmed.size === 0 && now - lastMonitorFocusMove < 250) return
+
   const activeMonitor = getActiveMonitorFromPoint(x, y)
   if (!activeMonitor) return
-
-  const now = Date.now()
 
   if (monitorFocusDimmed.has(activeMonitor.id)) {
     restoreMonitorFocusBrightness(activeMonitor)
@@ -4997,7 +5015,7 @@ function startMonitorFocusTracking() {
   buildElectronMonitorMap()
   enableMouseEvents()
   pauseMouseEvents(false)
-  monitorFocusInterval = setInterval(checkMonitorFocus, 1000)
+  monitorFocusInterval = setInterval(checkMonitorFocus, 2000)
   console.log(`\x1b[36mStarted monitor focus tracking.\x1b[0m`)
 }
 
@@ -5027,137 +5045,15 @@ function resetMonitorFocusState() {
 }
 
 
-// Get the currently applicable Time of Day Adjustment
+// Get the currently applicable Time of Day Adjustment.
+// Pure logic lives in ./adjustmentTimes.js; this wrapper supplies the live settings,
+// the current minute-of-day, and the sun-relative time resolver.
 function getCurrentAdjustmentEvent() {
-
-  const date = new Date()
-  const nowValue = (date.getHours() * 60) + (date.getMinutes() * 1)
-
-  // Find most recent event
-  let foundEvent = false
-  let latestEvent = false // Last event of the day, used to wrap around midnight
-  try {
-    for (let event of settings.adjustmentTimes) {
-      const eventTime = (event.useSunCalc ? getSunCalcTime(event.sunCalc) : event.time)
-      const eventValue = Utils.parseTime(eventTime)
-
-      const clone = () => {
-        const e = Object.assign({}, event)
-        e.monitors = Object.assign({}, event.monitors)
-        e.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
-        e.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
-        e.monitorsHighlightWeight = Object.assign({}, event.monitorsHighlightWeight)
-        e.value = eventValue
-        return e
-      }
-
-      // Check if event is not later than current time, last event time, or last found time
-      if (eventValue <= nowValue) {
-        // Check if found event is greater than last found event
-        if (foundEvent === false || foundEvent.value <= eventValue) {
-          foundEvent = clone()
-        }
-      }
-
-      // Track the latest event of the day for the midnight wrap-around fallback
-      if (latestEvent === false || latestEvent.value <= eventValue) {
-        latestEvent = clone()
-      }
-    }
-  } catch (e) {
-    console.log("Error getting adjustment times!", e)
-  }
-
-  // If no event has occurred yet today (now is before the first event), the active
-  // event is the last one from yesterday, which is still in effect overnight.
-  if (foundEvent === false) return latestEvent
-
-  return foundEvent
+  return AdjustmentTimes.getCurrentAdjustmentEvent(settings.adjustmentTimes, AdjustmentTimes.toNowValue(), getSunCalcTime)
 }
-
-function getNextAdjustmentEvent() {
-  const currentEvent = getCurrentAdjustmentEvent()
-  if (!currentEvent) return false
-
-  let earliestEvent = false
-  let closestEvent = false
-
-  try {
-    for (let event of settings.adjustmentTimes) {
-      const eventTime = (event.useSunCalc ? getSunCalcTime(event.sunCalc) : event.time)
-      const eventValue = Utils.parseTime(eventTime)
-
-      // Check if event is later than current time, and less than the last found event
-      if (eventValue > currentEvent.value && (!closestEvent || eventValue < closestEvent.value)) {
-        closestEvent = Object.assign({}, event)
-        closestEvent.monitors = Object.assign({}, event.monitors)
-        closestEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
-        closestEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
-        closestEvent.monitorsHighlightWeight = Object.assign({}, event.monitorsHighlightWeight)
-        closestEvent.value = eventValue
-      }
-
-      // Check if event is the earliest
-      if (!earliestEvent || eventValue < earliestEvent.value) {
-        earliestEvent = Object.assign({}, event)
-        earliestEvent.monitors = Object.assign({}, event.monitors)
-        earliestEvent.monitorsSoftwareDim = Object.assign({}, event.monitorsSoftwareDim)
-        earliestEvent.monitorsKelvin = Object.assign({}, event.monitorsKelvin)
-        earliestEvent.monitorsHighlightWeight = Object.assign({}, event.monitorsHighlightWeight)
-        earliestEvent.value = eventValue
-      }
-    }
-  } catch (e) {
-    console.log("Error getting adjustment times!", e)
-  }
-
-  // Return closest event or earliest event
-  return (closestEvent ? closestEvent : earliestEvent)
-}
-
 
 function getCurrentAdjustmentEventLERP() {
-  try {
-    const current = getCurrentAdjustmentEvent()
-    const next = getNextAdjustmentEvent()
-
-    if (!current || !next) return false;
-
-    const date = new Date()
-    let nowValue = (date.getHours() * 60) + (date.getMinutes() * 1)
-
-    if (current.value > next.value) {
-      next.value += 1440 // Add 24hr if next event is tomorrow
-      if (nowValue < current.value) nowValue += 1440 // Also adjust now if we've crossed midnight
-    }
-
-    // Calculate 0-1 percentage of progress
-    const lerpValues = {
-      next: next.value - current.value,
-      current: current.value - current.value,
-      now: nowValue - current.value
-    }
-    lerpValues.progress = lerpValues.next - lerpValues.now
-    lerpValues.end = lerpValues.next
-    lerpValues.percent = 1 - (lerpValues.progress / lerpValues.end)
-
-    // Generate result depending on if displays are linked
-    if (settings.adjustmentTimeIndividualDisplays) {
-      const keys = Object.keys(next.monitors)
-      const monitors = Object.assign({}, current.monitors)
-      keys.forEach(key => {
-        if (monitors[key] > -1) {
-          monitors[key] = Math.round(Utils.lerp(current.monitors[key], next.monitors[key], lerpValues.percent))
-        }
-      })
-      return monitors
-    } else {
-      return Math.round(Utils.lerp(current.brightness, next.brightness, lerpValues.percent))
-    }
-  } catch (e) {
-    console.log("Error generating Adjustment Time LERP", e)
-    return false
-  }
+  return AdjustmentTimes.getCurrentAdjustmentEventLERP(settings.adjustmentTimes, AdjustmentTimes.toNowValue(), settings.adjustmentTimeIndividualDisplays, getSunCalcTime)
 }
 
 function getSunCalcTime(timeName = "solarNoon") {
