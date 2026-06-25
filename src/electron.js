@@ -2896,7 +2896,6 @@ ipcMain.on('save-report', async () => {
 //
 
 store.update("panel", { panelState: "hidden" })
-let panelReady = false
 
 function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = true) {
 
@@ -2960,7 +2959,6 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
     if (mainWindow) {
       mainWindow.setMenu(windowMenu)
 
-      panelReady = true
       logger.debug("Panel ready!")
       createTray()
 
