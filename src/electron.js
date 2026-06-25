@@ -334,7 +334,7 @@ function enableMouseEvents() {
           updateAllBrightness(amount)
 
           // If panel isn't open, use the overlay
-          if (panelState !== "visible") {
+          if (store.get("panel").panelState !== "visible") {
             hotkeyOverlayStart(undefined, true)
           }
 
@@ -1372,7 +1372,7 @@ async function doHotkey(hotkey) {
 
         // Show brightness overlay, if applicable
         // If panel isn't open, use the overlay
-        if (showOverlay && panelState !== "visible") {
+        if (showOverlay && store.get("panel").panelState !== "visible") {
           hotkeyOverlayStart(undefined, true)
         }
 
@@ -1407,7 +1407,7 @@ async function hotkeyOverlayShow() {
 
   setAlwaysOnTop(true)
   sendToAllWindows("display-mode", "overlay")
-  panelState = "overlay"
+  store.update("panel", { panelState: "overlay" })
   let monitorCount = 0
   Object.values(monitors).forEach((monitor) => {
     if ((monitor.type === "ddcci" || monitor.type === "studio-display" || monitor.type === "wmi") && (settings?.hideDisplays?.[monitor.key] !== true)) monitorCount++;
@@ -2084,7 +2084,9 @@ function tryVibrancy(window, value = null) {
 //
 
 let isRefreshing = true
-let shouldShowPanel = false
+// panel slice (store-owned). Both panelState and shouldShowPanel are reassigned
+// values, so they're read/written through the store rather than aliased.
+store.update("panel", { shouldShowPanel: false })
 const setIsRefreshing = newValue => {
   isRefreshing = (newValue ? true : false)
   sendToAllWindows("isRefreshing", isRefreshing)
@@ -2219,8 +2221,8 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     }
   }
 
-  if (shouldShowPanel) {
-    shouldShowPanel = false
+  if (store.get("panel").shouldShowPanel) {
+    store.update("panel", { shouldShowPanel: false })
     setTimeout(() => toggleTray(true), 333)
   }
 
@@ -2788,7 +2790,7 @@ ipcMain.on('get-update', (event, version) => {
 })
 
 ipcMain.on('panel-height', (event, height) => {
-  if (panelState === "overlay") return;
+  if (store.get("panel").panelState === "overlay") return;
   panelSize.height = height + (settings?.isWin11 ? 24 : 0)
   panelSize.width = 392 + (settings?.isWin11 ? 24 : 0)
   if (panelSize.visible && !isAnimatingPanel) {
@@ -2798,7 +2800,7 @@ ipcMain.on('panel-height', (event, height) => {
 
 ipcMain.on('panel-hidden', () => {
   sendToAllWindows("display-mode", "normal")
-  panelState = "hidden"
+  store.update("panel", { panelState: "hidden" })
   if (settings.killWhenIdle) mainWindow.close()
 })
 
@@ -2868,7 +2870,7 @@ ipcMain.on('save-report', async () => {
 //
 //
 
-let panelState = "hidden"
+store.update("panel", { panelState: "hidden" })
 let panelReady = false
 
 function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = true) {
@@ -3457,7 +3459,7 @@ function showPanel(show = true, height = 300) {
     shouldAnimatePanel = false
     isAnimatingPanel = false
     sendToAllWindows("display-mode", "normal")
-    panelState = "hidden"
+    store.update("panel", { panelState: "hidden" })
     sendToAllWindows("closePanelAnimation")
     if (!settings.useAcrylic || !settings.useNativeAnimation) {
       tryVibrancy(mainWindow, false)
@@ -3984,11 +3986,11 @@ const toggleTray = async (doRefresh = true, isOverlay = false) => {
       sendMicaWallpaper()
       sendToAllWindows("display-mode", "normal")
       showPanel(true, panelSize.height)
-      panelState = "visible"
+      store.update("panel", { panelState: "visible" })
       mainWindow.focus()
     } else {
       sendToAllWindows("display-mode", "overlay")
-      panelState = "overlay"
+      store.update("panel", { panelState: "overlay" })
     }
     sendToAllWindows('request-height')
     mainWindow.webContents.send("tray-clicked")
@@ -5265,12 +5267,12 @@ function handleCommandLine(event, argv, directory, additionalData) {
         }
 
         // Show overlay
-        if (arg.indexOf("--overlay") === 0 && panelState !== "visible") {
+        if (arg.indexOf("--overlay") === 0 && store.get("panel").panelState !== "visible") {
           hotkeyOverlayStart()
         }
 
         // Show panel
-        if (arg.indexOf("--panel") === 0 && panelState !== "visible") {
+        if (arg.indexOf("--panel") === 0 && store.get("panel").panelState !== "visible") {
           toggleTray(true)
         }
 
