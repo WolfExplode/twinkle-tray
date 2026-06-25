@@ -146,7 +146,7 @@ let monitorsThread = {
       }
       if(!monitorsThreadReady) throw("Thread not ready!");
       if(!(monitorsThreadReal?.connected && monitorsThreadReal?.exitCode === null)) throw("Thread not available!");
-      if((data.type == "vcp" || data.type == "brightness" || data.type == "getVCP") && isRefreshing) while(isRefreshing) {
+      if((data.type == "vcp" || data.type == "brightness" || data.type == "getVCP") && store.get("monitors").isRefreshing) while(store.get("monitors").isRefreshing) {
         await Utils.wait(50)
       }
       monitorsThreadReal.send(data)
@@ -188,7 +188,7 @@ function startMonitorThread() {
       if (data.type === "ready") {
         monitorsThreadReady = true
         monitorsThreadStarting = false
-        isRefreshing = false
+        store.update("monitors", { isRefreshing: false })
         monitorsThreadReal.send({
           type: "settings",
           settings
@@ -2101,13 +2101,15 @@ function tryVibrancy(window, value = null) {
 //
 //
 
-let isRefreshing = true
+// isRefreshing (monitor-refresh-in-progress flag, also broadcast to renderers)
+// lives in the "monitors" store slice as a reassigned value.
+store.update("monitors", { isRefreshing: true })
 // panel slice (store-owned). Both panelState and shouldShowPanel are reassigned
 // values, so they're read/written through the store rather than aliased.
 store.update("panel", { shouldShowPanel: false })
 const setIsRefreshing = newValue => {
-  isRefreshing = (newValue ? true : false)
-  sendToAllWindows("isRefreshing", isRefreshing)
+  store.update("monitors", { isRefreshing: (newValue ? true : false) })
+  sendToAllWindows("isRefreshing", store.get("monitors").isRefreshing)
 }
 
 
@@ -2158,7 +2160,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
   }
 
   // Don't do 2+ refreshes at once
-  if (isRefreshing) {
+  if (store.get("monitors").isRefreshing) {
     logger.debug(`Already refreshing. Aborting.`)
     return monitors;
   }
@@ -2309,7 +2311,10 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
 
 
 
-let ignoreBrightnessEvent = false
+// ignoreBrightnessEvent (suppress Windows brightness events during our own WMI
+// writes) lives in the "monitors" slice as a reassigned value. Its companion
+// timeout handle below stays a local — it's a setTimeout handle, not state.
+store.update("monitors", { ignoreBrightnessEvent: false })
 let ignoreBrightnessEventTimeout = false
 function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness", clearTransition = true) {
   if(store.get("idle").isWindowsUserIdle) return false; // Skip if displays are off
@@ -2442,7 +2447,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
         id: monitor.id
       })
     } else if (monitor.type == "wmi") {
-      ignoreBrightnessEvent = true // Don't listen for Windows brightness events
+      store.update("monitors", { ignoreBrightnessEvent: true }) // Don't listen for Windows brightness events
       monitor.brightness = level
       monitor.brightnessRaw = normalized
       monitorsThread.send({
@@ -2451,7 +2456,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
       })
       if(ignoreBrightnessEventTimeout) clearTimeout(ignoreBrightnessEventTimeout);
       ignoreBrightnessEventTimeout = setTimeout(() => {
-        ignoreBrightnessEvent = false
+        store.update("monitors", { ignoreBrightnessEvent: false })
         ignoreBrightnessEventTimeout = false
       }, 500)
     }
@@ -2785,7 +2790,7 @@ ipcMain.on('flush-vcp-cache', function (event) {
 })
 
 ipcMain.on('get-refreshing', () => {
-  sendToAllWindows('isRefreshing', isRefreshing)
+  sendToAllWindows('isRefreshing', store.get("monitors").isRefreshing)
 })
 
 ipcMain.on('open-settings', createSettings)
@@ -3060,7 +3065,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
     } else if(setting.name === "GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS") {
       // Internal display brightness change
       if(!settings.useGuidBrightnessEvent) return false;
-      if(!ignoreBrightnessEvent) {
+      if(!store.get("monitors").ignoreBrightnessEvent) {
         for(const hwid2 in monitors) {
           const monitor = monitors[hwid2]
           if(monitor.type === "wmi") {
@@ -3642,7 +3647,7 @@ app.on("ready", async () => {
       }
     })
 
-    isRefreshing = false
+    store.update("monitors", { isRefreshing: false })
     await refreshMonitors(true, true)
 
     if (settings.brightnessAtStartup) setKnownBrightness();
@@ -3975,7 +3980,7 @@ const toggleTray = async (doRefresh = true, isOverlay = false) => {
     return false
   }
 
-  if (isRefreshing) {
+  if (store.get("monitors").isRefreshing) {
     //shouldShowPanel = true
     //return false
   }
