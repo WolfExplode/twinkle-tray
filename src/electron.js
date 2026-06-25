@@ -771,6 +771,9 @@ function readSettings(doProcessSettings = true) {
 }
 
 readSettings(false)
+// Persist on every settings change from here on. Registered after the boot-load
+// above so startup doesn't needlessly rewrite settings.json.
+store.subscribe("settings", persistSettings)
 if (settings.disableThrottling) {
   // Prevent background throttling
   app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -782,23 +785,25 @@ if (settings.forceLowPowerGPU) {
   app.commandLine.appendSwitch('force_low_power_gpu')
 }
 
-let writeSettingsTimeout = false
 function writeSettings(newSettings = {}, processAfter = true, sendUpdate = true) {
   store.update("settings", newSettings)
-
-  if (!writeSettingsTimeout) {
-    writeSettingsTimeout = setTimeout(() => {
-      // Save new settings
-      try {
-        fs.writeFile(settingsPath, JSON.stringify(settings, null, '\t'), (e) => { if (e) debug.error(e) })
-      } catch (e) {
-        debug.error("Couldn't save settings.", settingsPath, e)
-      }
-      writeSettingsTimeout = false
-    }, 333)
-  }
-
   if (processAfter) processSettings(newSettings, sendUpdate);
+}
+
+// Debounced disk persistence, subscribed to the settings slice (see init below).
+// Any store.update("settings", ...) — from writeSettings, reset, anywhere —
+// schedules a save; callers no longer write to disk directly.
+let writeSettingsTimeout = false
+function persistSettings() {
+  if (writeSettingsTimeout) return
+  writeSettingsTimeout = setTimeout(() => {
+    try {
+      fs.writeFile(settingsPath, JSON.stringify(settings, null, '\t'), (e) => { if (e) debug.error(e) })
+    } catch (e) {
+      debug.error("Couldn't save settings.", settingsPath, e)
+    }
+    writeSettingsTimeout = false
+  }, 333)
 }
 
 
