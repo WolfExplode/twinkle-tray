@@ -212,6 +212,7 @@ function startMonitorThread() {
     console.error(err)
 
     if(monitorsThreadFailed) return false;
+    if(err.code === 'EPIPE') return false;
     monitorsThreadFailed = true
 
     const options = {
@@ -3715,7 +3716,7 @@ app.on("activate", () => {
 app.on('quit', () => {
   try {
     ColorGamma.resetAllGammaRamps()
-  } catch (e) {}
+  } catch (e) { console.error("Failed to reset gamma ramps on quit", e) }
   try {
     tray.destroy()
   } catch (e) {
@@ -4993,10 +4994,18 @@ function checkMonitorFocus() {
 
     const lastVisited = monitorLastVisited[monitor.id] || 0
     if (now - lastVisited >= timeout) {
+      const dimLevel = settings.monitorFocusDimLevel ?? 0
+      const softwareDimTarget = settings.monitorFocusSoftwareDim ?? 0
+      const currentSoftwareDim = softwareDimLevels[monitor.id] || 0
+      // Skip if already at or below the inactive dim target — applying it would raise brightness
+      if (monitor.brightness <= dimLevel && currentSoftwareDim >= softwareDimTarget) {
+        console.log(`\x1b[36mSkipping inactive dim for ${monitor.id} — already at or below dim target\x1b[0m`)
+        continue
+      }
       monitorPreDimBrightness[monitor.id] = monitor.brightness
       monitorFocusDimmed.add(monitor.id)
       monitor.inactiveDimmed = true
-      applyMonitorFocusTransition(monitor, settings.monitorFocusDimLevel ?? 0, settings.monitorFocusSoftwareDim ?? 0)
+      applyMonitorFocusTransition(monitor, dimLevel, softwareDimTarget)
       console.log(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
     }
   }
@@ -5092,7 +5101,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 
         if (settings.adjustmentTimeAnimate) {
           // If LERPing, override foundEvent with interpolated value
-          lerp = getCurrentAdjustmentEventLERP()
+          const lerp = getCurrentAdjustmentEventLERP()
           if (typeof lerp === "number") {
             foundEvent.brightness = lerp
           } else if (typeof lerp === "object") {
@@ -5214,7 +5223,7 @@ async function getUserCoordinates() {
           lastCoordCheck.ts = Date.now()
           return coordinates
         }
-        throw("Couldn't get coordinates. Returned: " . JSON.stringify(coordinates))
+        throw("Couldn't get coordinates. Returned: " + JSON.stringify(coordinates))
       }
     }
   } catch (e) {
@@ -5498,7 +5507,6 @@ const handleClientMessage = async (message, remote) => {
       throw(`[${type}] Invalid command`)
     }
 
-    console.log(data.key, settings.udpKey)
     if (remote && data.key !== settings.udpKey) {
       throw("[UDP] Missing or invalid key")
     }

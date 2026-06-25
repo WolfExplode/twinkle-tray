@@ -244,7 +244,7 @@ function upgradeAdjustmentTimes(times = []) {
 
         const newTime = {
             brightness: (time.brightness ? time.brightness : 50),
-            monitors: (time.monitors ? time.monitors : 50),
+            monitors: (time.monitors ? time.monitors : {}),
             time: "00:00"
         }
 

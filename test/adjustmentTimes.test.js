@@ -97,6 +97,48 @@ test('LERP returns false with fewer than two events', () => {
   assert.strictEqual(getCurrentAdjustmentEventLERP([], at(8), false), false)
 })
 
+test('events listed out-of-order still find the correct current event', () => {
+  const outOfOrder = [ev("22:00", 20), ev("07:00", 60), ev("12:00", 100)]
+  assert.strictEqual(getCurrentAdjustmentEvent(outOfOrder, at(8)).value, at(7))
+  assert.strictEqual(getCurrentAdjustmentEvent(outOfOrder, at(13)).value, at(12))
+  // Midnight wrap still works
+  assert.strictEqual(getCurrentAdjustmentEvent(outOfOrder, at(2)).value, at(22))
+})
+
+test('single-event schedule: next wraps back to the only event', () => {
+  const single = [ev("12:00", 80)]
+  assert.strictEqual(getNextAdjustmentEvent(single, at(13)).value, at(12))
+  assert.strictEqual(getNextAdjustmentEvent(single, at(12)).value, at(12))
+})
+
+test('midnight event (00:00) is treated as the start of the day', () => {
+  const withMidnight = [ev("00:00", 10), ev("08:00", 80)]
+  // At midnight exactly: the 00:00 event is current.
+  assert.strictEqual(getCurrentAdjustmentEvent(withMidnight, at(0)).value, at(0))
+  // Just after midnight: still 00:00 event.
+  assert.strictEqual(getCurrentAdjustmentEvent(withMidnight, at(1)).value, at(0))
+  // At 23:00: last event before now is 08:00.
+  assert.strictEqual(getCurrentAdjustmentEvent(withMidnight, at(23)).value, at(8))
+})
+
+test('LERP skips per-monitor values that are inactive (-1)', () => {
+  const indiv = [
+    { time: "08:00", monitors: { A: 40, B: -1 } },
+    { time: "20:00", monitors: { A: 80, B: 60 } }
+  ]
+  // At 14:00 (halfway): A lerps 40→80 = 60; B stays -1 because current.B is not > -1.
+  const result = getCurrentAdjustmentEventLERP(indiv, at(14), true)
+  assert.strictEqual(result.A, 60)
+  assert.strictEqual(result.B, -1)
+})
+
+test('LERP at exactly the current event boundary returns that event value', () => {
+  // At exactly 07:00: percent = 0, result = current.brightness = 60.
+  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(7), false), 60)
+  // At exactly 12:00: percent = 0, result = current.brightness = 100.
+  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(12), false), 100)
+})
+
 test('sun-relative events resolve via the injected getSunCalcTime', () => {
   const sched = [
     { useSunCalc: true, sunCalc: "sunrise", brightness: 50, monitors: {} },

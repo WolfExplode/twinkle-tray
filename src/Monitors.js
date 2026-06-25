@@ -950,7 +950,9 @@ function setBrightness(brightness, id) {
             monitor.brightnessRaw = brightness
             if (!canUseWmiBridge || wmiFailed) {
                 // If native WMI is disabled, fall back to old method
-                exec(`powershell.exe -NoProfile (Get-WmiObject -Namespace root\\wmi -Class WmiMonitorBrightnessMethods).wmisetbrightness(0, ${brightness})"`)
+                const safeBrightness = Math.max(0, Math.min(100, parseInt(brightness)))
+                if (!Number.isFinite(safeBrightness)) throw new Error(`Invalid WMI brightness: ${brightness}`)
+                exec(`powershell.exe -NoProfile (Get-WmiObject -Namespace root\\wmi -Class WmiMonitorBrightnessMethods).wmisetbrightness(0, ${safeBrightness})`)
             } else {
                 // Set brightness via native WMI
                 wmibridge.setBrightness(brightness);
