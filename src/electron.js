@@ -1110,7 +1110,7 @@ function shouldSkipDisplay(monitorOrHwid1, skipEventCheck = false) {
 async function updateKnownDisplays(force = false, immediate = false) {
 
   // Skip when idle
-  if (!force && isUserIdle) return false;
+  if (!force && store.get("idle").isUserIdle) return false;
 
   const doFunc = () => {
     try {
@@ -4609,19 +4609,15 @@ function restartBackgroundUpdate() {
 
 
 // Idle detection
-let isUserIdle = false // Idle detection as defined by Twinkle Tray
-let userIdleInterval = false // Check if idle
-let userCheckingForActiveInterval = false // Check if came back
 // idle slice (store-owned): idle-detection flags/timer, all reassigned values
-// read and written through the store.
-store.update("idle", { userIdleDimmed: false, isWindowsUserIdle: false, lastIdleTime: 0 })
+// read and written through the store. isUserIdle is Twinkle Tray's own idle
+// definition; isWindowsUserIdle mirrors the OS idle state.
+store.update("idle", { isUserIdle: false, userIdleDimmed: false, isWindowsUserIdle: false, lastIdleTime: 0 })
 let idleMonitorBlock
 
 let idleMonitor = setInterval(idleCheckLong, 5000)
 let notIdleMonitor
 // lastIdleTime now lives in the "idle" store slice (seeded above)
-
-let preIdleMonitors = {}
 
 function getIdleSettingValue() {
   const detectIdleTime = (parseInt(settings.detectIdleTimeSeconds) + (settings.detectIdleTimeMinutes * 60))
@@ -4639,9 +4635,8 @@ function idleCheckLong() {
 }
 
 async function startIdleCheckShort() {
-  isUserIdle = true
+  store.update("idle", { isUserIdle: true })
   await updateKnownDisplays(true, true)
-  preIdleMonitors = Object.assign({}, store.get("monitors").lastKnownDisplays)
   logger.debug(`\x1b[36mStarted short idle monitor.\x1b[0m`)
   if (notIdleMonitor) clearInterval(notIdleMonitor);
   notIdleMonitor = setInterval(idleCheckShort, 1000)
@@ -4708,7 +4703,7 @@ function idleCheckShort() {
     }
 
     const lastIdleTime = store.get("idle").lastIdleTime
-    if (isUserIdle && (idleTime < lastIdleTime || idleTime < getIdleSettingValue())) {
+    if (store.get("idle").isUserIdle && (idleTime < lastIdleTime || idleTime < getIdleSettingValue())) {
       // Wake up
       logger.debug(`\x1b[36mUser no longer idle after ${lastIdleTime} seconds.\x1b[0m`)
       clearInterval(notIdleMonitor)
@@ -4735,8 +4730,7 @@ function idleCheckShort() {
 
       // Wait a little longer, re-apply known brightness in case monitors take a moment, and finish up
       setTimeout(() => {
-        isUserIdle = false
-        store.update("idle", { userIdleDimmed: false, lastIdleTime: 1 })
+        store.update("idle", { isUserIdle: false, userIdleDimmed: false, lastIdleTime: 1 })
 
         const block = blockBadDisplays("idle:end")
 
