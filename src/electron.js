@@ -90,7 +90,7 @@ const { EventEmitter } = require("events");
 const isReallyWin11 = (require("os").release()?.split(".")[2] * 1) >= 22000
 
 let ddcciModeTestResult = "auto"
-let lastKnownDisplays
+// lastKnownDisplays lives in the "monitors" store slice (seeded at the monitors decl)
 
 const SunCalc = require('suncalc')
 
@@ -441,7 +441,12 @@ function pingAnalytics() {
   lastAnalyticsPing = Date.now()
 }
 
-let monitors = {}
+// monitors slice (store-owned). `monitors` aliases the slice's stable map of
+// monitor objects (mutated in place; the one wholesale refresh replaces its
+// contents in place). lastKnownDisplays is a reassigned value read/written
+// through the store.
+store.update("monitors", { all: {}, lastKnownDisplays: undefined })
+const monitors = store.get("monitors").all
 let mainWindow;
 let tray = null
 let lastTheme = false
@@ -661,7 +666,7 @@ function readSettings(doProcessSettings = true) {
   }
   if (settingsVersion < Utils.getVersionValue("v1.16.0")) {
     // v1.16.0
-    lastKnownDisplays = {} // Reset lastKnownDisplays due to known bug in earlier versions
+    store.update("monitors", { lastKnownDisplays: {} }) // Reset lastKnownDisplays due to known bug in earlier versions
     try {
       // Upgrade hotkeys
       if (settings.hotkeys && Object.values(settings.hotkeys)?.length >= 0) {
@@ -1113,7 +1118,7 @@ async function updateKnownDisplays(force = false, immediate = false) {
       let known = getKnownDisplays(true)
 
       // Save to memory
-      lastKnownDisplays = known
+      store.update("monitors", { lastKnownDisplays: known })
 
       // Write back to file
       fs.writeFileSync(knownDisplaysPath, JSON.stringify(known))
@@ -1138,17 +1143,17 @@ async function updateKnownDisplays(force = false, immediate = false) {
 // Get known displays from file, along with current displays
 function getKnownDisplays(useCurrentMonitors) {
   let known
-  if (!lastKnownDisplays) {
+  if (!store.get("monitors").lastKnownDisplays) {
     try {
       // Load known displays DB
       known = fs.readFileSync(knownDisplaysPath)
       known = JSON.parse(known)
-      lastKnownDisplays = known
+      store.update("monitors", { lastKnownDisplays: known })
     } catch (e) {
       known = {}
     }
   } else {
-    known = lastKnownDisplays
+    known = store.get("monitors").lastKnownDisplays
   }
 
   // Merge with existing displays
@@ -1963,8 +1968,8 @@ ipcMain.on('reset-settings', () => {
   for (const key of Object.keys(settings)) delete settings[key]
   store.update("settings", Object.assign({}, defaultSettings))
   logger.debug("Resetting settings")
-  lastKnownDisplays = {}
-  fs.writeFileSync(knownDisplaysPath, JSON.stringify(lastKnownDisplays))
+  store.update("monitors", { lastKnownDisplays: {} })
+  fs.writeFileSync(knownDisplaysPath, JSON.stringify(store.get("monitors").lastKnownDisplays))
   writeSettings({ userClosedIntro: true })
 })
 
@@ -2223,7 +2228,9 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
 
     }
 
-    monitors = newMonitors;
+    // Replace contents in place so the store-owned `monitors` reference stays stable.
+    for (const k in monitors) delete monitors[k]
+    Object.assign(monitors, newMonitors)
 
     // Only send update if something changed
     if (JSON.stringify(newMonitors) !== JSON.stringify(oldMonitors)) {
@@ -3325,7 +3332,7 @@ function startFocusTracking() {
 
       // First, save current brightness for later
       await updateKnownDisplays(true, true)
-      preProfileBrightness = Object.assign({}, lastKnownDisplays)
+      preProfileBrightness = Object.assign({}, store.get("monitors").lastKnownDisplays)
 
       // Then apply user profile brightness
       applyProfileBrightness(profile)
@@ -4616,7 +4623,7 @@ function idleCheckLong() {
 async function startIdleCheckShort() {
   isUserIdle = true
   await updateKnownDisplays(true, true)
-  preIdleMonitors = Object.assign({}, lastKnownDisplays)
+  preIdleMonitors = Object.assign({}, store.get("monitors").lastKnownDisplays)
   logger.debug(`\x1b[36mStarted short idle monitor.\x1b[0m`)
   if (notIdleMonitor) clearInterval(notIdleMonitor);
   notIdleMonitor = setInterval(idleCheckShort, 1000)
