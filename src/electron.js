@@ -171,7 +171,7 @@ let monitorsThreadReady = false
 let monitorsThreadStarting = false
 let monitorsThreadFailed = false
 function startMonitorThread() {
-  if((monitorsThreadReal?.connected && monitorsThreadReal?.exitCode === null) || monitorsThreadStarting || isWindowsUserIdle) return false;
+  if((monitorsThreadReal?.connected && monitorsThreadReal?.exitCode === null) || monitorsThreadStarting || store.get("idle").isWindowsUserIdle) return false;
   monitorsThreadReady = false
   monitorsThreadStarting = true
   monitorsThreadFailed = false
@@ -1751,7 +1751,7 @@ function updateSoftwareDim(monitorId, level) {
     }
   }
 
-  if (isWindowsUserIdle) return
+  if (store.get("idle").isWindowsUserIdle) return
 
   if (level === 0) {
     if (softwareDimOverlays[monitorId] && !softwareDimOverlays[monitorId].isDestroyed()) {
@@ -1845,7 +1845,7 @@ function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
   if (kelvin !== undefined) warmthLevels[monitorId] = Math.max(3000, Math.min(6500, kelvin))
   if (highlightWeight !== undefined) highlightLevels[monitorId] = highlightWeight
 
-  if (isWindowsUserIdle) return
+  if (store.get("idle").isWindowsUserIdle) return
 
   ColorGamma.getDisplayCount()
 
@@ -2137,7 +2137,7 @@ let lastRefreshMonitors = 0
 
 async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
 
-  if (isWindowsUserIdle) {
+  if (store.get("idle").isWindowsUserIdle) {
     logger.debug("Displays are off, no updates.")
     return monitors
   }
@@ -2300,7 +2300,7 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
 let ignoreBrightnessEvent = false
 let ignoreBrightnessEventTimeout = false
 function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness", clearTransition = true) {
-  if(isWindowsUserIdle) return false; // Skip if displays are off
+  if(store.get("idle").isWindowsUserIdle) return false; // Skip if displays are off
   try {
     let level = newLevel
     let vcp = "brightness"
@@ -2531,7 +2531,7 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
     : Object.keys(monitors).length
 
   currentTransition = setInterval(() => {
-    if (recentlyWokeUp || isWindowsUserIdle) clearInterval(currentTransition);
+    if (recentlyWokeUp || store.get("idle").isWindowsUserIdle) clearInterval(currentTransition);
     let numDone = 0
     for (let key in monitors) {
       const monitor = monitors[key]
@@ -3014,7 +3014,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
       if(!settings.useGuidPresenceEvent) return false;
       if(setting.data === 2) {
         // Idle
-        if(!isWindowsUserIdle) {
+        if(!store.get("idle").isWindowsUserIdle) {
           logger.debug("Displays have gone to sleep.")
           hideSoftwareDimOverlays()
           hideDisplayColorEffects()
@@ -3024,11 +3024,11 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
           if (handleChangeTimeout2) clearTimeout(handleChangeTimeout2);
           //if(!isUserIdle) startIdleCheckShort();
         }
-        isWindowsUserIdle = true
+        store.update("idle", { isWindowsUserIdle: true })
       } else if(setting.data === 0) {
         // Active
-        if(isWindowsUserIdle) {
-          isWindowsUserIdle = false
+        if(store.get("idle").isWindowsUserIdle) {
+          store.update("idle", { isWindowsUserIdle: false })
           logger.debug("Displays have woken up.")
           recentlyWokeUp = true
           handleMetricsChange("GUID_SESSION_USER_PRESENCE")
@@ -4582,13 +4582,14 @@ function restartBackgroundUpdate() {
 let isUserIdle = false // Idle detection as defined by Twinkle Tray
 let userIdleInterval = false // Check if idle
 let userCheckingForActiveInterval = false // Check if came back
-let userIdleDimmed = false
+// idle slice (store-owned): idle-detection flags/timer, all reassigned values
+// read and written through the store.
+store.update("idle", { userIdleDimmed: false, isWindowsUserIdle: false, lastIdleTime: 0 })
 let idleMonitorBlock
-let isWindowsUserIdle = false // Idle detection as defined by Windows
 
 let idleMonitor = setInterval(idleCheckLong, 5000)
 let notIdleMonitor
-let lastIdleTime = 0
+// lastIdleTime now lives in the "idle" store slice (seeded above)
 
 let preIdleMonitors = {}
 
@@ -4601,7 +4602,7 @@ function idleCheckLong() {
   if (tempSettings.pauseIdleDetection) return false;
   //if(powerMonitor.onBatteryPower) return false;
   const idleTime = powerMonitor.getSystemIdleTime()
-  lastIdleTime = idleTime
+  store.update("idle", { lastIdleTime: idleTime })
   if (idleTime >= (settings.detectIdleTimeEnabled ? getIdleSettingValue() : 180) && !notIdleMonitor) {
     startIdleCheckShort()
   }
@@ -4643,9 +4644,9 @@ function idleCheckShort() {
   try {
     const idleTime = powerMonitor.getSystemIdleTime()
 
-    if (!userIdleDimmed && settings.detectIdleTimeEnabled && !settings.disableAutoApply && idleTime >= getIdleSettingValue() && !isFocusedWindowFullscreen() && !isMediaPlaying()) {
+    if (!store.get("idle").userIdleDimmed && settings.detectIdleTimeEnabled && !settings.disableAutoApply && idleTime >= getIdleSettingValue() && !isFocusedWindowFullscreen() && !isMediaPlaying()) {
       logger.debug(`\x1b[36mUser idle. Dimming displays.\x1b[0m`)
-      userIdleDimmed = true
+      store.update("idle", { userIdleDimmed: true })
       idleMonitorBlock?.release?.()
       idleMonitorBlock = blockBadDisplays("idle:start")
       try {
@@ -4676,6 +4677,7 @@ function idleCheckShort() {
       }
     }
 
+    const lastIdleTime = store.get("idle").lastIdleTime
     if (isUserIdle && (idleTime < lastIdleTime || idleTime < getIdleSettingValue())) {
       // Wake up
       logger.debug(`\x1b[36mUser no longer idle after ${lastIdleTime} seconds.\x1b[0m`)
@@ -4704,8 +4706,7 @@ function idleCheckShort() {
       // Wait a little longer, re-apply known brightness in case monitors take a moment, and finish up
       setTimeout(() => {
         isUserIdle = false
-        userIdleDimmed = false
-        lastIdleTime = 1
+        store.update("idle", { userIdleDimmed: false, lastIdleTime: 1 })
 
         const block = blockBadDisplays("idle:end")
 
@@ -4729,7 +4730,7 @@ function idleCheckShort() {
           }
           monitorLastVisited = {}
           monitorPreDimBrightness = {}
-          monitorFocusDimmed = new Set()
+          monitorFocusDimmed.clear()
         }
 
         block.release()
@@ -4737,7 +4738,7 @@ function idleCheckShort() {
       }, parseInt(settings.idleRestoreSeconds || 4) * 1000)
 
     }
-    lastIdleTime = idleTime
+    store.update("idle", { lastIdleTime: idleTime })
   } catch (e) {
     logger.debug('Error in idleCheckShort', e)
   }
@@ -4748,7 +4749,10 @@ function idleCheckShort() {
 let monitorFocusInterval = null
 let monitorLastVisited = {}
 let monitorPreDimBrightness = {}
-let monitorFocusDimmed = new Set()
+// focus slice (store-owned): the set of monitors currently focus-dimmed.
+// Stable Set reference aliased from the slice; cleared in place (never reassigned).
+store.update("focus", { monitorFocusDimmed: new Set() })
+const monitorFocusDimmed = store.get("focus").monitorFocusDimmed
 let electronToMonitorMap = {}
 let cachedElectronDisplays = null
 
@@ -4871,7 +4875,7 @@ function restoreMonitorFocusBrightness(monitor) {
 
 let lastMonitorFocusMove = 0
 function handleMonitorFocusMouseMove(x, y) {
-  if (!settings.monitorFocusEnabled || !monitors || userIdleDimmed || isWindowsUserIdle) return
+  if (!settings.monitorFocusEnabled || !monitors || store.get("idle").userIdleDimmed || store.get("idle").isWindowsUserIdle) return
   if (tempSettings.pauseIdleDetection) return
 
   const now = Date.now()
@@ -4894,7 +4898,7 @@ function handleMonitorFocusMouseMove(x, y) {
 }
 
 function checkMonitorFocus() {
-  if (!monitors || userIdleDimmed || isWindowsUserIdle) return
+  if (!monitors || store.get("idle").userIdleDimmed || store.get("idle").isWindowsUserIdle) return
   if (tempSettings.pauseIdleDetection) return
 
   const activeMonitor = getActiveMonitorFromCursor()
@@ -4966,7 +4970,7 @@ function resetMonitorFocusState() {
   }
   monitorLastVisited = {}
   monitorPreDimBrightness = {}
-  monitorFocusDimmed = new Set()
+  monitorFocusDimmed.clear()
   electronToMonitorMap = {}
 }
 
@@ -4992,7 +4996,7 @@ function getSunCalcTime(timeName = "solarNoon") {
 function applyCurrentAdjustmentEvent(force = false, instant = true) {
   try {
     if (tempSettings.pauseTimeAdjustments || !settings.adjustmentTimesActive || currentProfile?.setBrightness) return false;
-    if (settings.adjustmentTimes.length === 0 || userIdleDimmed) return false;
+    if (settings.adjustmentTimes.length === 0 || store.get("idle").userIdleDimmed) return false;
 
     const date = new Date()
 
@@ -5098,17 +5102,17 @@ function handleBackgroundUpdate(force = false) {
     sendMicaWallpaper()
 
     // Time of Day Adjustments
-    if (settings.adjustmentTimesActive && settings.adjustmentTimes.length > 0 && !userIdleDimmed) {
+    if (settings.adjustmentTimesActive && settings.adjustmentTimes.length > 0 && !store.get("idle").userIdleDimmed) {
       applyCurrentAdjustmentEvent(force, false)
     }
 
     // Sync scheduled color from current time event (respects manual tray toggles)
-    if (!isWindowsUserIdle && settings.adjustmentTimesActive && (settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
+    if (!store.get("idle").isWindowsUserIdle && settings.adjustmentTimesActive && (settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
       applyCurrentDisplayColorEffects(false)
     }
 
     // Re-apply display color transforms (gamma ramps can be overwritten by the OS)
-    if (!isWindowsUserIdle && (store.get("color").manualTemperatureActive || store.get("color").manualHighlightActive || settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
+    if (!store.get("idle").isWindowsUserIdle && (store.get("color").manualTemperatureActive || store.get("color").manualHighlightActive || settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
       showDisplayColorEffects()
     }
   } catch (e) {
