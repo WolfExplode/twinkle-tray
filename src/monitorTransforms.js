@@ -46,4 +46,14 @@ function applyRemaps(monitorList, remaps = {}) {
   return monitorList
 }
 
-module.exports = { applyOrder, applyRemap, applyRemaps }
+// Decide whether a display should be skipped when re-applying brightness.
+// Matches the monitor's hwid[1] (or a raw hwid string) against the built-in
+// skip rules plus the user's. `monitorOrHwid` may be a monitor object or a
+// hwid string.
+function shouldSkipDisplay(monitorOrHwid, skipRules = [], userSkipRules = []) {
+  const hwid1 = (typeof monitorOrHwid === "string" ? monitorOrHwid : monitorOrHwid?.hwid?.[1])
+  const rules = [].concat(skipRules, userSkipRules)
+  return rules.includes(hwid1)
+}
+
+module.exports = { applyOrder, applyRemap, applyRemaps, shouldSkipDisplay }

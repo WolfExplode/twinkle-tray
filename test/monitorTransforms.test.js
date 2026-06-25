@@ -1,6 +1,6 @@
 const { test } = require('node:test')
 const assert = require('node:assert')
-const { applyOrder, applyRemap, applyRemaps } = require('../src/monitorTransforms')
+const { applyOrder, applyRemap, applyRemaps, shouldSkipDisplay } = require('../src/monitorTransforms')
 
 test('applyOrder sets monitor.order from matching id entries', () => {
   const monitors = {
@@ -66,4 +66,27 @@ test('applyRemaps applies across every monitor in the list', () => {
   })
   assert.strictEqual(monitors.a.min, 10)
   assert.strictEqual(monitors.b.calibration, 25)
+})
+
+test('shouldSkipDisplay matches a monitor hwid[1] against built-in rules', () => {
+  const monitor = { hwid: ['root', 'DEL41D9', 'x'] }
+  assert.strictEqual(shouldSkipDisplay(monitor, ['DEL41D9'], []), true)
+})
+
+test('shouldSkipDisplay matches against user rules too', () => {
+  const monitor = { hwid: ['root', 'MYMON', 'x'] }
+  assert.strictEqual(shouldSkipDisplay(monitor, ['DEL41D9'], ['MYMON']), true)
+})
+
+test('shouldSkipDisplay accepts a raw hwid string', () => {
+  assert.strictEqual(shouldSkipDisplay('DEL41D9', ['DEL41D9']), true)
+})
+
+test('shouldSkipDisplay returns false when hwid is not in any rule list', () => {
+  const monitor = { hwid: ['root', 'OTHER', 'x'] }
+  assert.strictEqual(shouldSkipDisplay(monitor, ['DEL41D9'], ['MYMON']), false)
+})
+
+test('shouldSkipDisplay returns false for a monitor with no hwid', () => {
+  assert.strictEqual(shouldSkipDisplay({ id: 'x' }, ['DEL41D9'], []), false)
 })
