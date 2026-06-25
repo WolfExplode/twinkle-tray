@@ -993,7 +993,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       lastTheme["UseAcrylic"] = newSettings.useAcrylic
       sendToAllWindows('theme-settings', lastTheme)
       if(newSettings.useAcrylic) {
-        currentWallpaperTime = false
+        store.update("mica", { currentWallpaperTime: false })
         sendMicaWallpaper()
       }
       doRestartPanel = true
@@ -5374,19 +5374,32 @@ function handleCommandLine(event, argv, directory, additionalData) {
 
 
 // Mica features
-let currentWallpaper = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs%3D";
-let currentWallpaperTime = false;
-let currentWallpaperFileSize = 0;
-let currentScreenSize = { width: 1280, height: 720, scale: 1 }
+// mica slice (store-owned): the wallpaper image + screen size broadcast to the
+// panel renderer. currentWallpaper is the Mica'd image URL; currentWallpaperTime
+// / currentWallpaperFileSize track the source wallpaper's mtime/size for change
+// detection; currentScreenSize is the primary display work area + scale. All
+// reassigned through the store. micaBusy (re-entrancy lock) and lastMicaTime
+// (cache-bust stamp used only to build the wallpaper URL) stay local — mechanics.
+store.update("mica", {
+  currentWallpaper: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs%3D",
+  currentWallpaperTime: false,
+  currentWallpaperFileSize: 0,
+  currentScreenSize: { width: 1280, height: 720, scale: 1 }
+})
 let micaBusy = false
 let lastMicaTime = Date.now()
 const homeDir = require("os").homedir()
 const micaWallpaperPath = path.join(configFilesDir, `\\mica${(isDev ? "-dev" : "")}.jpg`)
 const windowWallpaperPath = path.join(homeDir, "AppData", "Roaming", "Microsoft", "Windows", "Themes", "TranscodedWallpaper");
 
+function broadcastMicaWallpaper() {
+  const mica = store.get("mica")
+  sendToAllWindows("mica-wallpaper", { path: mica.currentWallpaper, size: mica.currentScreenSize })
+}
+
 function checkMicaWallpaper() {
   if (micaBusy) {
-    sendToAllWindows("mica-wallpaper", { path: currentWallpaper, size: currentScreenSize })
+    broadcastMicaWallpaper()
     return false
   }
   try {
@@ -5394,21 +5407,23 @@ function checkMicaWallpaper() {
     const newTime = file.mtime.getTime()
     const newSize = file.size
 
-    currentScreenSize = screen.getPrimaryDisplay().workAreaSize
-    currentScreenSize.scale = screen.getPrimaryDisplay().scaleFactor
-    if (file?.mtime && (newTime !== currentWallpaperTime || newSize !== currentWallpaperFileSize)) {
+    const screenSize = screen.getPrimaryDisplay().workAreaSize
+    screenSize.scale = screen.getPrimaryDisplay().scaleFactor
+    store.update("mica", { currentScreenSize: screenSize })
+
+    const mica = store.get("mica")
+    if (file?.mtime && (newTime !== mica.currentWallpaperTime || newSize !== mica.currentWallpaperFileSize)) {
       micaBusy = true
-      currentWallpaperTime = newTime
-      currentWallpaperFileSize = newSize;
+      store.update("mica", { currentWallpaperTime: newTime, currentWallpaperFileSize: newSize })
 
       // Send off wallpaper to be Mica'd in "panel" renderer
-      sendToAllWindows("mica-wallpaper-create", { path: "file://" + windowWallpaperPath + "?" + newTime, size: currentScreenSize })
+      sendToAllWindows("mica-wallpaper-create", { path: "file://" + windowWallpaperPath + "?" + newTime, size: screenSize })
     }
-    sendToAllWindows("mica-wallpaper", { path: currentWallpaper, size: currentScreenSize })
+    broadcastMicaWallpaper()
 
   } catch(e) {
     micaBusy = false
-    sendToAllWindows("mica-wallpaper", { path: currentWallpaper, size: currentScreenSize })
+    broadcastMicaWallpaper()
   }
 }
 
@@ -5417,16 +5432,16 @@ ipcMain.on('mica-wallpaper-data', (event, data) => {
     logger.debug("Created Mica wallpaper:", micaWallpaperPath)
     fs.writeFileSync(micaWallpaperPath, Buffer.from(data.split(',')[1], 'base64'))
     lastMicaTime = Date.now()
-    currentWallpaper = "file://" + micaWallpaperPath + "?" + lastMicaTime
-    sendToAllWindows("mica-wallpaper", { path: currentWallpaper, size: currentScreenSize })
-  } catch(e) { 
+    store.update("mica", { currentWallpaper: "file://" + micaWallpaperPath + "?" + lastMicaTime })
+    broadcastMicaWallpaper()
+  } catch(e) {
     logger.debug(e)
   }
   micaBusy = false
 })
 
 ipcMain.on('mica-wallpaper-same', (event, data) => {
-  sendToAllWindows("mica-wallpaper", { path: currentWallpaper, size: currentScreenSize })
+  broadcastMicaWallpaper()
 })
 
 async function sendMicaWallpaper() {
