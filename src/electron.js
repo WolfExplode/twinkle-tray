@@ -19,6 +19,7 @@ const isPortable = (app.name == "twinkle-tray-portable" ? true : false)
 
 const Utils = require("./Utils")
 const AdjustmentTimes = require("./adjustmentTimes")
+const logger = require('./logger') // init()'d in the Logging block below once logPath is known
 
 const configFilesDir = (isPortable ? path.join(__dirname, "../../config/") : app.getPath("userData"))
 const settingsPath = path.join(configFilesDir, `\\settings${(isDev ? "-dev" : "")}.json`)
@@ -30,7 +31,7 @@ if (!singleInstanceLock) {
   try { Utils.handleProcessedArgs(Utils.processArgs(process.argv, app), knownDisplaysPath, settingsPath).then(() => app.exit()) } catch (e) { app.exit() }
   return false
 } else {
-  console.log("Starting Twinkle Tray...")
+  logger.debug("Starting Twinkle Tray...")
   app.on('second-instance', handleCommandLine)
 }
 
@@ -95,28 +96,20 @@ app.allowRendererProcessReuse = true
 const logPath = path.join(configFilesDir, `\\debug${(isDev ? "-dev" : "")}.log`)
 const updatePath = path.join(configFilesDir, `\\update.exe`)
 
-// Remove old log
-if (fs.existsSync(logPath)) {
-  try {
-    fs.unlinkSync(logPath)
-  } catch (e) {
-    console.log("Couldn't delete log file")
-  }
-}
+const consoleEnabled = isDev || app.commandLine.hasSwitch("console")
+logger.init({
+  logPath,
+  consoleEnabled,
+  // In dev or with --console, capture everything; otherwise persist info and up.
+  threshold: consoleEnabled ? 0 : 1
+})
 
-const log = async (...args) => {
-  for (let arg of args) {
-    console.log(arg, "\r\n")
-    fs.appendFile(logPath, arg.toString(), () => { })
-  }
-}
-
+// Back-compat alias: existing `debug.log`/`debug.error` calls are the ones meant
+// to persist in production, so they map to info/error.
 const debug = {
-  log,
-  error: log
+  log: (...args) => logger.info(...args),
+  error: (...args) => logger.error(...args)
 }
-
-if (!isDev && !app.commandLine.hasSwitch("console")) console.log = () => { };
 
 
 const windowMenu = Menu.buildFromTemplate([{
@@ -154,7 +147,7 @@ let monitorsThread = {
       }
       monitorsThreadReal.send(data)
     } catch (e) {
-      console.log("Couldn't communicate with Monitor thread.", e)
+      logger.debug("Couldn't communicate with Monitor thread.", e)
     }
   },
   once: function (message, callback) {
@@ -164,7 +157,7 @@ let monitorsThread = {
       }
       monitorsEventEmitter.once(message, callback)
     } catch (e) {
-      console.log("Couldn't listen to Monitor thread.", e)
+      logger.debug("Couldn't listen to Monitor thread.", e)
     }
   }
 }
@@ -178,7 +171,7 @@ function startMonitorThread() {
   monitorsThreadReady = false
   monitorsThreadStarting = true
   monitorsThreadFailed = false
-  console.log("Starting monitor thread")
+  logger.debug("Starting monitor thread")
   const skipTest = (settings.preferredDDCCIMethod == "auto" ? false : true)
   monitorsThreadReal = fork(path.join(__dirname, 'Monitors.js'), ["--isdev=" + isDev, "--apppath=" + app.getAppPath(), "--skiptest=" + skipTest], { silent: false })
   monitorsThreadReal.on("message", (data) => {
@@ -209,7 +202,7 @@ function startMonitorThread() {
     }
   })
   monitorsThreadReal.on("error", err => {
-    console.error(err)
+    logger.error(err)
 
     if(monitorsThreadFailed) return false;
     if(err.code === 'EPIPE') return false;
@@ -233,7 +226,7 @@ function startMonitorThread() {
 }
 
 function stopMonitorThread() {
-  console.log("Killing monitor thread")
+  logger.debug("Killing monitor thread")
   monitorsThreadReady = false
   monitorsThreadStarting = false
   setIsRefreshing(false)
@@ -257,7 +250,7 @@ function getVCP(monitor, code) {
         try {
           monitors[hwid?.split("#")[2]].features[vcpStr(vcpParsed)] = data.value?.[0]
         } catch(e) {
-          console.log(e)
+          logger.debug(e)
         }
       }
       resolve(data?.value?.[0])
@@ -280,16 +273,16 @@ async function doWMIBridgeTest() {
     monitorsThreadTest = fork(path.join(__dirname, 'wmi-bridge-test.js'), ["--isdev=" + isDev, "--apppath=" + app.getAppPath()], { silent: false })
     monitorsThreadTest.on("message", (data) => {
       if (data?.type === "ready") {
-        console.log("WMI-BRIDGE TEST: READY")
+        logger.debug("WMI-BRIDGE TEST: READY")
       }
       if (data?.type === "ok") {
-        console.log("WMI-BRIDGE TEST: OK")
+        logger.debug("WMI-BRIDGE TEST: OK")
         wmiBridgeOK = true
         monitorsThreadTest.kill()
         resolve(true)
       }
       if(data?.type === "failed") {
-        console.log("WMI-BRIDGE TEST: FAILED")
+        logger.debug("WMI-BRIDGE TEST: FAILED")
         monitorsThreadTest.kill()
         resolve(false)
       }
@@ -298,11 +291,11 @@ async function doWMIBridgeTest() {
     setTimeout(() => {
       try {
         if (monitorsThreadTest.connected) {
-          console.log("WMI-BRIDGE TEST: Killing thread")
+          logger.debug("WMI-BRIDGE TEST: Killing thread")
           monitorsThreadTest.kill()
         }
         resolve(false)
-      } catch (e) { console.log(e) }
+      } catch (e) { logger.debug(e) }
     }, 2000)
   })
 }
@@ -341,7 +334,7 @@ function enableMouseEvents() {
 
         }
       } catch (e) {
-        console.error(e)
+        logger.error(e)
       }
     });
 
@@ -373,7 +366,7 @@ function enableMouseEvents() {
     })
 
   } catch (e) {
-    console.error(e)
+    logger.error(e)
   }
 
 }
@@ -387,12 +380,12 @@ function pauseMouseEvents(paused) {
 
   if (paused) {
     if (mouseEvents && !mouseEvents.getPaused()) {
-      console.log("Pausing mouse events...")
+      logger.debug("Pausing mouse events...")
       mouseEvents.pauseMouseEvents()
     }
   } else {
     if (mouseEvents && mouseEvents.getPaused()) {
-      console.log("Resuming mouse events...")
+      logger.debug("Resuming mouse events...")
       mouseEvents.resumeMouseEvents()
     }
   }
@@ -420,7 +413,7 @@ function pingAnalytics() {
   if (Date.now() < lastAnalyticsPing + (1000 * 60 * 28)) return false;
 
   const analytics = require('ga4-mp').createClient("Y1YTliQdTL-moveI0z1TLA", "G-BQ22ZK4BPY", settings.uuid)
-  console.log("\x1b[34mAnalytics:\x1b[0m sending with UUID " + settings.uuid)
+  logger.debug("\x1b[34mAnalytics:\x1b[0m sending with UUID " + settings.uuid)
 
   let events = []
   events.push({
@@ -624,9 +617,9 @@ function readSettings(doProcessSettings = true) {
       // Upgrade adjustment times
       const upgradedTimes = Utils.upgradeAdjustmentTimes(settings.adjustmentTimes)
       settings.adjustmentTimes = upgradedTimes
-      console.log("Upgraded Adjustment Times to v1.15.0 format!")
+      logger.debug("Upgraded Adjustment Times to v1.15.0 format!")
     } catch (e) {
-      console.log("Couldn't upgrade Adjustment Times", e)
+      logger.debug("Couldn't upgrade Adjustment Times", e)
     }
     try {
       // Upgrade idle settings
@@ -638,9 +631,9 @@ function readSettings(doProcessSettings = true) {
         }
         delete settings.detectIdleTime
       }
-      console.log("Upgraded Idle settings to v1.15.0 format!")
+      logger.debug("Upgraded Idle settings to v1.15.0 format!")
     } catch (e) {
-      console.log("Couldn't upgrade Idle settings", e)
+      logger.debug("Couldn't upgrade Idle settings", e)
     }
   } else if(appVersionValue < Utils.getVersionValue("v1.16.0") && settingsVersion >= Utils.getVersionValue("v1.16.0")) {
     // Downgrade from v1.16.0+
@@ -649,7 +642,7 @@ function readSettings(doProcessSettings = true) {
     } else {
       settings.hotkeys = {}
     }
-    console.log("Downgraded settings from v1.16.0+ format!")
+    logger.debug("Downgraded settings from v1.16.0+ format!")
   }
   if (settingsVersion < Utils.getVersionValue("v1.16.0")) {
     // v1.16.0
@@ -690,9 +683,9 @@ function readSettings(doProcessSettings = true) {
         }
         settings.hotkeys = newHotkeys
       }
-      console.log(`Upgraded ${settings.hotkeys.length} hotkeys to v1.16.0 format!`)
+      logger.debug(`Upgraded ${settings.hotkeys.length} hotkeys to v1.16.0 format!`)
     } catch (e) {
-      console.log("Couldn't upgrade hotkeys", e)
+      logger.debug("Couldn't upgrade hotkeys", e)
     }
     try {
       // Upgrade Adjustment Times for SunCalc
@@ -700,9 +693,9 @@ function readSettings(doProcessSettings = true) {
         time.useSunCalc = false
         time.sunCalc = "sunrise"
       }
-      console.log("Upgraded Adjustment Times to v1.16.0 format!")
+      logger.debug("Upgraded Adjustment Times to v1.16.0 format!")
     } catch(e) {
-      console.log("Couldn't upgrade Adjustment Times", e)
+      logger.debug("Couldn't upgrade Adjustment Times", e)
     }
     try {
       // Upgrade Monitor Features for v1.16.0
@@ -720,9 +713,9 @@ function readSettings(doProcessSettings = true) {
         }
       }
       settings.monitorFeatures = newMonitorFeatures
-      console.log("Upgraded Monitor Features to v1.16.0 format!")
+      logger.debug("Upgraded Monitor Features to v1.16.0 format!")
     } catch(e) {
-      console.log("Couldn't upgrade Monitor Features", e)
+      logger.debug("Couldn't upgrade Monitor Features", e)
     }
     try {
       // Remove disableOverlay
@@ -733,7 +726,7 @@ function readSettings(doProcessSettings = true) {
         delete settings.disableOverlay
       }
     } catch(e) {
-      console.log("Couldn't remove disableOverlay")
+      logger.debug("Couldn't remove disableOverlay")
     }
   }
 
@@ -922,7 +915,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
           }
         }
       } catch(e) {
-        console.log("Couldn't read monitorFeatures", e)
+        logger.debug("Couldn't read monitorFeatures", e)
       }
     }
 
@@ -1037,7 +1030,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     }
 
   } catch (e) {
-    console.log("Couldn't process settings!", e)
+    logger.debug("Couldn't process settings!", e)
   }
 
   if(monitorsThreadReady) {
@@ -1067,13 +1060,13 @@ function blockBadDisplays(tag = "") {
     const found = displaysMayBeIdleBlocks.indexOf(blockUUID)
     if(found >= 0) {
       displaysMayBeIdleBlocks.splice(found, 1)
-      console.log(`\x1b[36mReleased block: ${blockUUID} ${tag} [${displaysMayBeIdleBlocks.length} left]\x1b[0m`)
+      logger.debug(`\x1b[36mReleased block: ${blockUUID} ${tag} [${displaysMayBeIdleBlocks.length} left]\x1b[0m`)
       return true
     }
-    console.log(`\x1b[36mFailed to release block: ${blockUUID} ${tag}\x1b[0m`)
+    logger.debug(`\x1b[36mFailed to release block: ${blockUUID} ${tag}\x1b[0m`)
     return false
   }
-  console.log(`\x1b[36mStarted block: ${blockUUID} ${tag}\x1b[0m`)
+  logger.debug(`\x1b[36mStarted block: ${blockUUID} ${tag}\x1b[0m`)
   return {
     uuid: blockUUID,
     release: async () => {
@@ -1092,7 +1085,7 @@ function shouldSkipDisplay(monitorOrHwid1, skipEventCheck = false) {
   try {
     rules = rules.concat(settings.userSkipReapply)
   } catch(e) {
-    console.log("Error merging userSkipReapply:", e)
+    logger.debug("Error merging userSkipReapply:", e)
   }
   const inRules = rules.includes(hwid1)
   return inRules
@@ -1114,9 +1107,9 @@ async function updateKnownDisplays(force = false, immediate = false) {
 
       // Write back to file
       fs.writeFileSync(knownDisplaysPath, JSON.stringify(known))
-      console.log(`\x1b[36mSaved known displays!\x1b[0m`)
+      logger.debug(`\x1b[36mSaved known displays!\x1b[0m`)
     } catch (e) {
-      console.error("Couldn't update known displays file.")
+      logger.error("Couldn't update known displays file.")
     }
   }
 
@@ -1159,7 +1152,7 @@ function getKnownDisplays(useCurrentMonitors) {
 // Look up all known displays and re-apply last brightness
 function setKnownBrightness(useCurrentMonitors = false, useTransition = false, transitionSpeed = 1) {
 
-  console.log(`\x1b[36mSetting brightness for known displays\x1b[0m`, useCurrentMonitors, useTransition, transitionSpeed)
+  logger.debug(`\x1b[36mSetting brightness for known displays\x1b[0m`, useCurrentMonitors, useTransition, transitionSpeed)
 
   const known = getKnownDisplays(useCurrentMonitors)
   applyProfile(known, useTransition, transitionSpeed)
@@ -1178,7 +1171,7 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
         const monitor = profile[hwid]
         if(shouldSkipDisplay(monitor)) continue;
         transitionMonitors[monitor.id] = monitor.brightness
-      } catch (e) { console.log("Couldn't set brightness for known display!") }
+      } catch (e) { logger.debug("Couldn't set brightness for known display!") }
     }
     transitionBrightness(50, transitionMonitors, transitionSpeed)
   } else {
@@ -1196,7 +1189,7 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
           }
           updateBrightness(monitor.id, monitor.brightness)
         }
-      } catch (e) { console.log("Couldn't set brightness for known display!") }
+      } catch (e) { logger.debug("Couldn't set brightness for known display!") }
     }
   }
   
@@ -1223,7 +1216,7 @@ function applyHotkeys(monitorList = monitors) {
       }
     }
   } catch(e) {
-    console.log("Couldn't apply hotkeys:", e)
+    logger.debug("Couldn't apply hotkeys:", e)
   }
   sendToAllWindows('settings-updated', settings)
 }
@@ -1366,7 +1359,7 @@ async function doHotkey(hotkey) {
 
                 // Break linked levels
                 if (settings.hotkeysBreakLinkedLevels && settings.linkedLevelsActive) {
-                  console.log("Breaking linked levels due to hotkey.")
+                  logger.debug("Breaking linked levels due to hotkey.")
                   writeSettings({ linkedLevelsActive: false })
                 }
                 showOverlay = true
@@ -1397,7 +1390,7 @@ async function doHotkey(hotkey) {
         }
 
       } catch (e) {
-        console.log("HOTKEY ERROR:", e)
+        logger.debug("HOTKEY ERROR:", e)
       }
     }
 
@@ -1654,7 +1647,7 @@ function getLocalization() {
     const defaultFile = fs.readFileSync(path.join(__dirname, `/localization/en.json`))
     localization.default = JSON.parse(defaultFile)
   } catch (e) {
-    console.error("Couldn't read default langauge file!")
+    logger.error("Couldn't read default langauge file!")
   }
 
   // Get user's local localization file, if available
@@ -1665,7 +1658,7 @@ function getLocalization() {
       const desiredFile = fs.readFileSync(langPath)
       localization.desired = JSON.parse(desiredFile)
     } catch (e) {
-      console.error(`Couldn't read language file: ${localization.detected}.json`)
+      logger.error(`Couldn't read language file: ${localization.detected}.json`)
     }
   }
 
@@ -1702,7 +1695,7 @@ async function getAllLanguages() {
               name: langName
             })
           } catch (e) {
-            console.error(`Error reading language from ${file}`)
+            logger.error(`Error reading language from ${file}`)
           }
         }
         localization.languages = languages
@@ -1731,7 +1724,7 @@ function getDDCBrightnessVCPs() {
     }
     return ids
   } catch (e) {
-    console.log("Couldn't generate DDC Brightness IDs!", e)
+    logger.debug("Couldn't generate DDC Brightness IDs!", e)
     return {}
   }
 }
@@ -1962,7 +1955,7 @@ function applyCurrentDisplayColorEffects(overrideManual = true) {
 }
 
 ipcMain.on('send-settings', (event, data) => {
-  console.log("Recieved new settings", data.newSettings)
+  logger.debug("Recieved new settings", data.newSettings)
   writeSettings(data.newSettings, true, data.sendUpdate)
 })
 
@@ -1973,20 +1966,20 @@ ipcMain.on('request-settings', (event) => {
 
 ipcMain.on('reset-settings', () => {
   settings = Object.assign({}, defaultSettings)
-  console.log("Resetting settings")
+  logger.debug("Resetting settings")
   lastKnownDisplays = {}
   fs.writeFileSync(knownDisplaysPath, JSON.stringify(lastKnownDisplays))
   writeSettings({ userClosedIntro: true })
 })
 
 ipcMain.on('open-settings-file', () => {
-  console.log("Opening settings file in default editor")
+  logger.debug("Opening settings file in default editor")
   exec(`notepad.exe "${settingsPath}"`)
 })
 
 // Get the user's Windows Personalization settings
 async function getThemeRegistry() {
-  console.log("Function: getThemeRegistry");
+  logger.debug("Function: getThemeRegistry");
 
   if (lastTheme) sendToAllWindows('theme-settings', lastTheme)
 
@@ -1999,7 +1992,7 @@ async function getThemeRegistry() {
     themeSettings.SystemUsesLightTheme = reg.getValue(key, null, 'SystemUsesLightTheme');
     themeSettings.ColorPrevalence = reg.getValue(key, null, 'ColorPrevalence');
   } catch (e) {
-    console.log("Couldn't access theme registry", e)
+    logger.debug("Couldn't access theme registry", e)
   }
 
   themeSettings.UseAcrylic = settings.useAcrylic
@@ -2035,7 +2028,7 @@ async function getThemeRegistry() {
       }
     }
   } catch (e) {
-    console.log("Couldn't access taskbar registry", e)
+    logger.debug("Couldn't access taskbar registry", e)
   }
 
   return true
@@ -2056,7 +2049,7 @@ function getAccentColors() {
   try {
     if (systemPreferences.getAccentColor().length == 8)
       detectedAccent = systemPreferences.getAccentColor().substr(0, 6)
-  } catch (e) { console.log("Couldn't get accent color from registry!") }
+  } catch (e) { logger.debug("Couldn't get accent color from registry!") }
   const accent = Color("#" + detectedAccent, "hex")
   const matchLumi = (color, level) => {
     let adjusted = color.hsl()
@@ -2096,7 +2089,7 @@ function tryVibrancy(window, value = null) {
     Acrylic.setAcrylic(window.getNativeWindowHandle().readInt32LE(0), 1, color.red(), color.green(), color.blue(), parseInt(color.alpha() * 255))
   }
   catch (e) {
-    console.log("Couldn't set vibrancy", e)
+    logger.debug("Couldn't set vibrancy", e)
   }
 }
 
@@ -2152,38 +2145,38 @@ let lastRefreshMonitors = 0
 async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
 
   if (isWindowsUserIdle) {
-    console.log("Displays are off, no updates.")
+    logger.debug("Displays are off, no updates.")
     return monitors
   }
 
   if (!monitorsThreadReady || pausedMonitorUpdates) {
-    console.log("Sorry, no updates right now!")
+    logger.debug("Sorry, no updates right now!")
     return monitors
   }
 
   // Don't do 2+ refreshes at once
   if (isRefreshing) {
-    console.log(`Already refreshing. Aborting.`)
+    logger.debug(`Already refreshing. Aborting.`)
     return monitors;
   }
 
   lastRefreshMonitors = Date.now()
 
-  console.log(" ")
-  console.log("\x1b[34m-------------- Refresh Monitors -------------- \x1b[0m")
+  logger.debug(" ")
+  logger.debug("\x1b[34m-------------- Refresh Monitors -------------- \x1b[0m")
 
   // Don't check too often for no reason
   const now = Date.now()
   if (!fullRefresh && !bypassRateLimit && now < lastEagerUpdate + 5000) {
-    console.log(`Requesting update too soon. ${5000 - (now - lastEagerUpdate)}ms left.`)
-    console.log("\x1b[34m---------------------------------------------- \x1b[0m")
+    logger.debug(`Requesting update too soon. ${5000 - (now - lastEagerUpdate)}ms left.`)
+    logger.debug("\x1b[34m---------------------------------------------- \x1b[0m")
     return monitors;
   }
   setIsRefreshing(true)
 
   // Reset all known displays
   if (fullRefresh) {
-    console.log("Doing full refresh.")
+    logger.debug("Doing full refresh.")
   }
 
   // Save old monitors for comparison
@@ -2199,7 +2192,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     }
     lastEagerUpdate = Date.now()
   } catch (e) {
-    console.log('Couldn\'t refresh monitors', e)
+    logger.debug('Couldn\'t refresh monitors', e)
   }
 
   if (!failed) {
@@ -2239,7 +2232,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
       setTrayStatus()
       sendToAllWindows('monitors-updated', monitors)
     } else {
-      console.log("===--- NO CHANGE ---===")
+      logger.debug("===--- NO CHANGE ---===")
     }
   }
 
@@ -2248,7 +2241,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     setTimeout(() => toggleTray(true), 333)
   }
 
-  console.log("\x1b[34m---------------------------------------------- \x1b[0m")
+  logger.debug("\x1b[34m---------------------------------------------- \x1b[0m")
   setIsRefreshing(false)
   return monitors;
 }
@@ -2298,7 +2291,7 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
           try {
             updateBrightness(bUpdate.id, bUpdate.level, bUpdate.useCap, bUpdate.vcp, bUpdate.clearTransition)
           } catch (e) {
-            console.error(e)
+            logger.error(e)
           }
         }
       }
@@ -2331,14 +2324,14 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
       })
     } else {
       if (index >= Object.keys(monitors).length) {
-        console.log("updateBrightness: Invalid monitor")
+        logger.debug("updateBrightness: Invalid monitor")
         return false;
       }
       monitor = monitors[index]
     }
 
     if (!monitor) {
-      console.log(`Monitor does not exist: ${index}`)
+      logger.debug(`Monitor does not exist: ${index}`)
       return false
     }
 
@@ -2358,7 +2351,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
     }
 
     if(shouldSkipDisplay(monitor)) {
-      console.log(`\x1b[31mSkipping monitor ${monitor.id} due to rules list\x1b[0m`)
+      logger.debug(`\x1b[31mSkipping monitor ${monitor.id} due to rules list\x1b[0m`)
       return false
     }
 
@@ -2429,10 +2422,10 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
             code: parseInt(vcp),
             value: parseInt(level)
           })
-          console.log('monitors-updated', monitor.features?.[vcpString])
+          logger.debug('monitors-updated', monitor.features?.[vcpString])
           
         } catch(e) {
-          console.log(`Couldn't set VCP code ${vcpString} for monitor ${monitor.id}`, e)
+          logger.debug(`Couldn't set VCP code ${vcpString} for monitor ${monitor.id}`, e)
         }
       }
     } else if (monitor.type === "studio-display") {
@@ -2683,7 +2676,7 @@ function sleepDisplays(mode = "ps", delayMS = 333) {
     }, delayMS)
 
   } catch (e) {
-    console.log(e)
+    logger.debug(e)
   }
 }
 
@@ -2719,7 +2712,7 @@ async function turnOffDisplayDDC(hwid, toggle = false) {
       })
     }
   } catch (e) {
-    console.log("turnOffDisplayDDC failed", e)
+    logger.debug("turnOffDisplayDDC failed", e)
   }
 }
 
@@ -2817,7 +2810,7 @@ ipcMain.on('get-refreshing', () => {
 
 ipcMain.on('open-settings', createSettings)
 
-ipcMain.on('log', (e, msg) => console.log(msg))
+ipcMain.on('log', (e, msg) => logger.fromRemote('UI', msg))
 
 ipcMain.on('pause-updates', pauseMonitorUpdates)
 
@@ -2922,7 +2915,7 @@ let panelReady = false
 
 function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = true) {
 
-  console.log("Creating panel...")
+  logger.debug("Creating panel...")
 
   mainWindow = new BrowserWindow({
     width: panelSize.width,
@@ -2972,16 +2965,16 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
       : `file://${path.join(__dirname, "../build/index.html")}`
   );
 
-  mainWindow.on("closed", () => { console.log("~~~~~ MAIN WINDOW CLOSED ~~~~~~"); mainWindow = null });
-  mainWindow.on("minimize", () => { console.log("~~~~~ MAIN WINDOW MINIMIZED ~~~~~~") });
-  mainWindow.on("restore", () => { console.log("~~~~~ MAIN WINDOW RESTORED ~~~~~~") });
+  mainWindow.on("closed", () => { logger.debug("~~~~~ MAIN WINDOW CLOSED ~~~~~~"); mainWindow = null });
+  mainWindow.on("minimize", () => { logger.debug("~~~~~ MAIN WINDOW MINIMIZED ~~~~~~") });
+  mainWindow.on("restore", () => { logger.debug("~~~~~ MAIN WINDOW RESTORED ~~~~~~") });
 
   mainWindow.once('ready-to-show', () => {
     if (mainWindow) {
       mainWindow.setMenu(windowMenu)
 
       panelReady = true
-      console.log("Panel ready!")
+      logger.debug("Panel ready!")
       createTray()
 
       if(showOnLoad) showPanel(false);
@@ -3044,7 +3037,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
 
     const setting = PowerEvents.getPowerSetting(lParam.readBigInt64LE(0))
     if(setting.name !== "" || setting.guid) {
-      console.log(`Event: ${setting.name || setting.guid} (${setting.data})`)
+      logger.debug(`Event: ${setting.name || setting.guid} (${setting.data})`)
     }
 
     if(setting.name === "GUID_SESSION_USER_PRESENCE") {
@@ -3052,7 +3045,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
       if(setting.data === 2) {
         // Idle
         if(!isWindowsUserIdle) {
-          console.log("Displays have gone to sleep.")
+          logger.debug("Displays have gone to sleep.")
           hideSoftwareDimOverlays()
           hideDisplayColorEffects()
 
@@ -3066,7 +3059,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
         // Active
         if(isWindowsUserIdle) {
           isWindowsUserIdle = false
-          console.log("Displays have woken up.")
+          logger.debug("Displays have woken up.")
           recentlyWokeUp = true
           handleMetricsChange("GUID_SESSION_USER_PRESENCE")
           setTimeout(showSoftwareDimOverlays, 500)
@@ -3106,7 +3099,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
       // SC_MONITORPOWER
       if(lParam.readUInt32LE() === 2) {
         // 2 = Display is being shut off
-        console.log("Event: SC_MONITORPOWER")
+        logger.debug("Event: SC_MONITORPOWER")
         //if(!isUserIdle) startIdleCheckShort();
       }
     }
@@ -3121,7 +3114,7 @@ function currentOverlayType() {
   if(!overlayType || overlayType == "normal") {
     overlayType = settings.defaultOverlayType
   }
-  console.log(`overlayType: ${overlayType}`)
+  logger.debug(`overlayType: ${overlayType}`)
   return overlayType
 }
 
@@ -3151,9 +3144,9 @@ function destroyPanel() {
 
 let restartingPanel = false
 function restartPanel(show = false) {
-  console.log("Function: restartPanel");
+  logger.debug("Function: restartPanel");
   if(restartingPanel) {
-    console.log("Function: restartPanel: already restarting")
+    logger.debug("Function: restartPanel: already restarting")
     return false
   }
   restartingPanel = true
@@ -3248,7 +3241,7 @@ function repositionPanel() {
 
       if (typeof settings.overrideTaskbarGap === "number") {
         gap = settings.overrideTaskbarGap
-        console.log(gap)
+        logger.debug(gap)
       }
 
       return { position, gap }
@@ -3301,7 +3294,7 @@ function repositionPanel() {
 
     sendToAllWindows('panel-position', mainWindow.getPosition())
   } catch (e) {
-    console.log("Couldn't reposition panel", e)
+    logger.debug("Couldn't reposition panel", e)
   }
 }
 
@@ -3369,12 +3362,12 @@ function startFocusTracking() {
     currentProfile = profile
   })
 
-  console.log(`Starting focus tracking... (#${focusTrackingID})`)
+  logger.debug(`Starting focus tracking... (#${focusTrackingID})`)
 }
 
 function stopFocusTracking() {
   if (focusTrackingID) {
-    console.log("Stopping focus tracking...")
+    logger.debug("Stopping focus tracking...")
     ActiveWindow.unsubscribe(focusTrackingID)
     focusTrackingID = 0
   }
@@ -3394,7 +3387,7 @@ function windowMatchesProfile(window) {
       }
     }
   }
-  if(foundProfile) console.log(`Matched window to profile ${foundProfile.name}`);
+  if(foundProfile) logger.debug(`Matched window to profile ${foundProfile.name}`);
   return foundProfile
 }
 
@@ -3405,7 +3398,7 @@ function applyProfileBrightness(profile) {
     })
     sendToAllWindows('monitors-updated', monitors)
   } catch (e) {
-    console.log("Error applying profile brightness", e)
+    logger.debug("Error applying profile brightness", e)
   }
 }
 
@@ -3529,10 +3522,10 @@ function showPanel(show = true, height = 300) {
 function trySetForegroundWindow(hwnd) {
   if (!hwnd) return false;
   try {
-    console.log("trySetForegroundWindow: " + hwnd)
+    logger.debug("trySetForegroundWindow: " + hwnd)
     WindowUtils.setForegroundWindow(hwnd)
   } catch (e) {
-    console.log("Couldn't focus window", e)
+    logger.debug("Couldn't focus window", e)
   }
 }
 
@@ -3651,7 +3644,7 @@ function doAnimationStep() {
 
 // Local Parcel server
 if(isDev) {
-  console.log("Starting Parcel bundler server...")
+  logger.debug("Starting Parcel bundler server...")
   require("./parcelAPI")("dev", 1)
 }
 
@@ -3692,7 +3685,7 @@ app.on("ready", async () => {
     isStartupGracePeriod = true
     setTimeout(() => {
       isStartupGracePeriod = false
-      console.log("Startup grace period ended")
+      logger.debug("Startup grace period ended")
     }, 30000) // 30 seconds grace period
   
     setTimeout(addEventListeners, 5000)
@@ -3716,7 +3709,7 @@ app.on("activate", () => {
 app.on('quit', () => {
   try {
     ColorGamma.resetAllGammaRamps()
-  } catch (e) { console.error("Failed to reset gamma ramps on quit", e) }
+  } catch (e) { logger.error("Failed to reset gamma ramps on quit", e) }
   try {
     tray.destroy()
   } catch (e) {
@@ -3986,7 +3979,7 @@ function setTrayStatus() {
       tray.setToolTip(tooltip)
     }
   } catch (e) {
-    console.log(e)
+    logger.debug(e)
   }
 }
 
@@ -4262,7 +4255,7 @@ checkForUpdates = async (force = false) => {
   lastCheck = new Date().getDate()
   try {
     if (isAppX === false) {
-      console.log("Checking for updates...")
+      logger.debug("Checking for updates...")
       fetch("https://api.github.com/repos/xanderfrangos/twinkle-tray/releases").then((response) => {
         response.json().then((releases) => {
           let foundVersion = false
@@ -4284,14 +4277,14 @@ checkForUpdates = async (force = false) => {
                 show: false,
                 error: false
               }
-              console.log("Found version: " + latestVersion.version)
+              logger.debug("Found version: " + latestVersion.version)
               break
             }
           }
 
           if (foundVersion && "v" + appVersion != latestVersion.version && (settings.dismissedUpdate != latestVersion.version || force)) {
             if (!force) latestVersion.show = true
-            console.log("Sending new version to windows.")
+            logger.debug("Sending new version to windows.")
             sendToAllWindows('latest-version', latestVersion)
           }
 
@@ -4299,14 +4292,14 @@ checkForUpdates = async (force = false) => {
       });
     }
   } catch (e) {
-    console.log(e)
+    logger.debug(e)
   }
 }
 
 
 getLatestUpdate = async (version) => {
   try {
-    console.log("Downloading update from: " + version.downloadURL)
+    logger.debug("Downloading update from: " + version.downloadURL)
     const fs = require('fs');
 
     latestVersion.downloading = true
@@ -4317,13 +4310,13 @@ getLatestUpdate = async (version) => {
       try {
         fs.unlinkSync(updatePath)
       } catch (e) {
-        console.log("Couldn't delete old update file")
+        logger.debug("Couldn't delete old update file")
       }
     }
 
     const update = await fetch(version.downloadURL)
     await new Promise((resolve, reject) => {
-      console.log("Downloading...!")
+      logger.debug("Downloading...!")
       const readableNodeStream = Readable.fromWeb(update.body)
       const dest = fs.createWriteStream(updatePath)
       //update.body.pipe(dest);
@@ -4338,7 +4331,7 @@ getLatestUpdate = async (version) => {
         resolve(true)
       })
       readableNodeStream.on('finish', function () {
-        console.log("Saved! Running...")
+        logger.debug("Saved! Running...")
       });
 
       let size = 0
@@ -4353,14 +4346,14 @@ getLatestUpdate = async (version) => {
         if (size >= lastSizeUpdate + (version.filesize * 0.01) || lastSizeUpdate === 0 || size === version.filesize) {
           lastSizeUpdate = size
           sendToAllWindows('updateProgress', Math.floor((size / version.filesize) * 100))
-          console.log(`Downloaded ${size / 1000}KB. [${Math.floor((size / version.filesize) * 100)}%]`)
+          logger.debug(`Downloaded ${size / 1000}KB. [${Math.floor((size / version.filesize) * 100)}%]`)
         }
       })
 
     })
 
   } catch (e) {
-    console.log("Couldn't download update!", e)
+    logger.debug("Couldn't download update!", e)
     latestVersion.show = true
     latestVersion.downloading = false
     sendToAllWindows('latest-version', latestVersion)
@@ -4373,7 +4366,7 @@ function runUpdate(expectedSize = false) {
     if (!fs.existsSync(updatePath)) {
       throw ("Update file doesn't exist!")
     }
-    console.log("Expected size: " + expectedSize)
+    logger.debug("Expected size: " + expectedSize)
     const fileSize = fs.statSync(updatePath).size
     if (expectedSize && fileSize != expectedSize) {
       try {
@@ -4382,7 +4375,7 @@ function runUpdate(expectedSize = false) {
       } catch (e) {
         throw ("Couldn't delete update file. " + e)
       }
-      console.log("Atempted to delete update file")
+      logger.debug("Atempted to delete update file")
       throw (`Update is wrong file size! Expected: ${expectedSize}. Got: ${fileSize}`)
     }
 
@@ -4413,7 +4406,7 @@ function runUpdate(expectedSize = false) {
     process.unref()
     app.quit()
   } catch (e) {
-    console.log(e)
+    logger.debug(e)
     latestVersion.show = true
     latestVersion.error = true
     sendToAllWindows('latest-version', latestVersion)
@@ -4467,7 +4460,7 @@ let handleAccentChangeTimeout = false
 function handleAccentChange() {
   if (handleAccentChangeTimeout) clearTimeout(handleAccentChangeTimeout);
   handleAccentChangeTimeout = setTimeout(async () => {
-    console.log("Event: handleAccentChange");
+    logger.debug("Event: handleAccentChange");
     sendToAllWindows('update-colors', getAccentColors())
     await getThemeRegistry()
     setTimeout(sendMicaWallpaper, 100)
@@ -4486,7 +4479,7 @@ let handleChangeTimeout0
 let handleChangeTimeout1
 let handleChangeTimeout2
 function handleMonitorChange(t, e, d) {
-  console.log(`Event: handleMonitorChange (${t})`);
+  logger.debug(`Event: handleMonitorChange (${t})`);
 
   // Skip event that happens at startup
   if (!skipFirstMonChange) {
@@ -4494,7 +4487,7 @@ function handleMonitorChange(t, e, d) {
     return false
   }
 
-  console.log("Hardware change detected.")
+  logger.debug("Hardware change detected.")
 
   const block = blockBadDisplays("handleMonitorChange")
 
@@ -4543,7 +4536,7 @@ let recentlyWokeUp = false
 
 // Handle resume from sleep/hibernation
 powerMonitor.on("resume", () => {
-  console.log("Resuming......")
+  logger.debug("Resuming......")
   stopMonitorThread()
   const block = blockBadDisplays("powerMonitor:resume")
   setRecentlyInteracted(false)
@@ -4582,7 +4575,7 @@ powerMonitor.on("resume", () => {
 })
 
 function handleMetricsChange(type) {
-  console.log(`Event: handleMetricsChange (${type})`);
+  logger.debug(`Event: handleMetricsChange (${type})`);
 
   const block = blockBadDisplays("handleMetricsChange")
 
@@ -4618,13 +4611,13 @@ function handleMetricsChange(type) {
 }
 
 
-powerMonitor.on("suspend", () => { console.log("Event: suspend"); recentlyWokeUp = true; stopMonitorThread() })
+powerMonitor.on("suspend", () => { logger.debug("Event: suspend"); recentlyWokeUp = true; stopMonitorThread() })
 powerMonitor.on("lock-screen", () => {
-  console.log("Event: lock-screen");
+  logger.debug("Event: lock-screen");
   if (settings.disableOnLockScreen) recentlyWokeUp = true
 })
 powerMonitor.on("unlock-screen", () => {
-  console.log("Event: unlock-screen");
+  logger.debug("Event: unlock-screen");
   if (recentlyWokeUp) {
     if (!settings.disableAutoRefresh) handleMetricsChange("unlock-screen");
     setTimeout(() => {
@@ -4687,7 +4680,7 @@ async function startIdleCheckShort() {
   isUserIdle = true
   await updateKnownDisplays(true, true)
   preIdleMonitors = Object.assign({}, lastKnownDisplays)
-  console.log(`\x1b[36mStarted short idle monitor.\x1b[0m`)
+  logger.debug(`\x1b[36mStarted short idle monitor.\x1b[0m`)
   if (notIdleMonitor) clearInterval(notIdleMonitor);
   notIdleMonitor = setInterval(idleCheckShort, 1000)
 }
@@ -4699,7 +4692,7 @@ function isFocusedWindowFullscreen() {
     const isFullscreen = WindowUtils.getWindowFullscreen(focusedHwnd)
     return isFullscreen
   } catch(e) {
-    console.log(e)
+    logger.debug(e)
     return false
   }
 }
@@ -4710,7 +4703,7 @@ function isMediaPlaying() {
     const mediaPlaying = MediaStatus.getPlaybackStatus()
     return (mediaPlaying === "playing" ? true : false)
   } catch(e) {
-    console.log(e)
+    logger.debug(e)
     return false
   }
 }
@@ -4720,7 +4713,7 @@ function idleCheckShort() {
     const idleTime = powerMonitor.getSystemIdleTime()
 
     if (!userIdleDimmed && settings.detectIdleTimeEnabled && !settings.disableAutoApply && idleTime >= getIdleSettingValue() && !isFocusedWindowFullscreen() && !isMediaPlaying()) {
-      console.log(`\x1b[36mUser idle. Dimming displays.\x1b[0m`)
+      logger.debug(`\x1b[36mUser idle. Dimming displays.\x1b[0m`)
       userIdleDimmed = true
       idleMonitorBlock?.release?.()
       idleMonitorBlock = blockBadDisplays("idle:start")
@@ -4748,13 +4741,13 @@ function idleCheckShort() {
           })
         }
       } catch (e) {
-        console.log(`Error dimming displays`, e)
+        logger.debug(`Error dimming displays`, e)
       }
     }
 
     if (isUserIdle && (idleTime < lastIdleTime || idleTime < getIdleSettingValue())) {
       // Wake up
-      console.log(`\x1b[36mUser no longer idle after ${lastIdleTime} seconds.\x1b[0m`)
+      logger.debug(`\x1b[36mUser no longer idle after ${lastIdleTime} seconds.\x1b[0m`)
       clearInterval(notIdleMonitor)
       notIdleMonitor = false
 
@@ -4815,7 +4808,7 @@ function idleCheckShort() {
     }
     lastIdleTime = idleTime
   } catch (e) {
-    console.log('Error in idleCheckShort', e)
+    logger.debug('Error in idleCheckShort', e)
   }
 }
 
@@ -4851,7 +4844,7 @@ function buildElectronMonitorMap() {
       electronToMonitorMap[d.id] = trayMonitors[i].id
     }
   })
-  console.log(`\x1b[36mBuilt monitor focus map: ${JSON.stringify(electronToMonitorMap)}\x1b[0m`)
+  logger.debug(`\x1b[36mBuilt monitor focus map: ${JSON.stringify(electronToMonitorMap)}\x1b[0m`)
 }
 
 function getActiveMonitorFromPoint(x, y) {
@@ -4940,7 +4933,7 @@ function restoreMonitorFocusBrightness(monitor) {
   stopMonitorFocusTransition()
   if (targetBrightness !== undefined) {
     updateBrightness(monitor.id, targetBrightness, true, "brightness")
-    console.log(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
+    logger.debug(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
   }
   updateSoftwareDim(monitor.id, targetSoftwareDim)
   monitorFocusDimmed.delete(monitor.id)
@@ -4999,14 +4992,14 @@ function checkMonitorFocus() {
       const currentSoftwareDim = softwareDimLevels[monitor.id] || 0
       // Skip if already at or below the inactive dim target — applying it would raise brightness
       if (monitor.brightness <= dimLevel && currentSoftwareDim >= softwareDimTarget) {
-        console.log(`\x1b[36mSkipping inactive dim for ${monitor.id} — already at or below dim target\x1b[0m`)
+        logger.debug(`\x1b[36mSkipping inactive dim for ${monitor.id} — already at or below dim target\x1b[0m`)
         continue
       }
       monitorPreDimBrightness[monitor.id] = monitor.brightness
       monitorFocusDimmed.add(monitor.id)
       monitor.inactiveDimmed = true
       applyMonitorFocusTransition(monitor, dimLevel, softwareDimTarget)
-      console.log(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
+      logger.debug(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
     }
   }
 }
@@ -5023,7 +5016,7 @@ function startMonitorFocusTracking() {
   enableMouseEvents()
   pauseMouseEvents(false)
   monitorFocusInterval = setInterval(checkMonitorFocus, 2000)
-  console.log(`\x1b[36mStarted monitor focus tracking.\x1b[0m`)
+  logger.debug(`\x1b[36mStarted monitor focus tracking.\x1b[0m`)
 }
 
 function stopMonitorFocusTracking() {
@@ -5088,7 +5081,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 
     // Reset on new day
     if (force || settings.adjustmentTimeAnimate || (lastTimeEvent && lastTimeEvent.day != date.getDate())) {
-      console.log("New day (or forced)... resetting lastTimeEvent")
+      logger.debug("New day (or forced)... resetting lastTimeEvent")
       lastTimeEvent = false
     }
 
@@ -5109,7 +5102,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           }
         }
 
-        console.log("Adjusting brightness automatically", foundEvent)
+        logger.debug("Adjusting brightness automatically", foundEvent)
         lastTimeEvent = Object.assign({}, foundEvent)
         lastTimeEvent.day = new Date().getDate()
 
@@ -5161,7 +5154,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
       }
     }
   } catch (e) {
-    console.log("Error applying current Time of Day Adjustment", e)
+    logger.debug("Error applying current Time of Day Adjustment", e)
   }
 
 }
@@ -5173,7 +5166,7 @@ let lastTimeEvent = {
   day: new Date().getDate()
 }
 function handleBackgroundUpdate(force = false) {
-  console.log("Event: handleBackgroundUpdate");
+  logger.debug("Event: handleBackgroundUpdate");
 
   try {
     // Wallpaper updates
@@ -5194,7 +5187,7 @@ function handleBackgroundUpdate(force = false) {
       showDisplayColorEffects()
     }
   } catch (e) {
-    console.error(e)
+    logger.error(e)
   }
 
   if (!force) checkForUpdates(); // Ignore when forced update, since it should just be about fixing brightness.
@@ -5210,7 +5203,7 @@ async function getUserCoordinates() {
   if(Date.now() - 10000 < lastCoordCheck.ts) return lastCoordCheck.value;
   try {
     if (isAppX === false) {
-      console.log("Getting geolocation...")
+      logger.debug("Getting geolocation...")
       const response = await fetch("https://geo.twinkletray.com/")
       if(response.status === 200) {
         const coordinates = {
@@ -5218,7 +5211,7 @@ async function getUserCoordinates() {
           long: response.headers.get("X-Geo-Long")
         }
         if(typeof coordinates.lat === "string" && typeof coordinates.long === "string") {
-          console.log("Coordinates: ", coordinates)
+          logger.debug("Coordinates: ", coordinates)
           lastCoordCheck.value = coordinates
           lastCoordCheck.ts = Date.now()
           return coordinates
@@ -5227,7 +5220,7 @@ async function getUserCoordinates() {
       }
     }
   } catch (e) {
-    console.log(e)
+    logger.debug(e)
   }
 }
 
@@ -5236,7 +5229,7 @@ async function getAndApplyUserCoordinates() {
     const coordinates = await getUserCoordinates()
     writeSettings({adjustmentTimeLongitude: coordinates.long, adjustmentTimeLatitude: coordinates.lat}, true, true)
   } catch(e) {
-    console.log(e)
+    logger.debug(e)
   }
 }
 
@@ -5352,7 +5345,7 @@ function handleCommandLine(event, argv, directory, additionalData) {
               value: parseInt(values[1])
             }
           } catch (e) {
-            console.log("Couldn't parse VCP code!")
+            logger.debug("Couldn't parse VCP code!")
           }
 
         }
@@ -5373,11 +5366,11 @@ function handleCommandLine(event, argv, directory, additionalData) {
       if (display && type && brightness !== undefined) {
 
         if (display === "all") {
-          console.log(`Setting brightness via command line: All @ ${brightness}%`);
+          logger.debug(`Setting brightness via command line: All @ ${brightness}%`);
           updateAllBrightness(brightness, type)
         } else {
           const newBrightness = minMax(type === "set" ? brightness : display.brightness + brightness)
-          console.log(`Setting brightness via command line: Display #${display.num} (${display.name}) @ ${newBrightness}%`);
+          logger.debug(`Setting brightness via command line: Display #${display.num} (${display.name}) @ ${newBrightness}%`);
           updateBrightnessThrottle(display.id, newBrightness, true)
         }
 
@@ -5410,7 +5403,7 @@ function handleCommandLine(event, argv, directory, additionalData) {
     }
 
   } catch (e) {
-    console.log(e)
+    logger.debug(e)
   }
 
 }
@@ -5459,13 +5452,13 @@ function checkMicaWallpaper() {
 
 ipcMain.on('mica-wallpaper-data', (event, data) => {
   try {
-    console.log("Created Mica wallpaper:", micaWallpaperPath)
+    logger.debug("Created Mica wallpaper:", micaWallpaperPath)
     fs.writeFileSync(micaWallpaperPath, Buffer.from(data.split(',')[1], 'base64'))
     lastMicaTime = Date.now()
     currentWallpaper = "file://" + micaWallpaperPath + "?" + lastMicaTime
     sendToAllWindows("mica-wallpaper", { path: currentWallpaper, size: currentScreenSize })
   } catch(e) { 
-    console.log(e)
+    logger.debug(e)
   }
   micaBusy = false
 })
@@ -5497,9 +5490,9 @@ const handleClientMessage = async (message, remote) => {
 
   try {
     if(remote) {
-      console.log(`[${type}] Got: ${message} from ${remote.address}:${remote.port}`)
+      logger.debug(`[${type}] Got: ${message} from ${remote.address}:${remote.port}`)
     } else {
-      console.log(`[${type}] Got: ${message}`)
+      logger.debug(`[${type}] Got: ${message}`)
     }
     
     const data = JSON.parse(message)
@@ -5622,7 +5615,7 @@ const handleClientMessage = async (message, remote) => {
     }
 
   } catch (e) {
-    console.log(`[${type}] Error:`, e)
+    logger.debug(`[${type}] Error:`, e)
   }
 }
 
@@ -5640,13 +5633,13 @@ const udp = {
   start: function (port = 14715) {
     if (udp.server) return false;
 
-    console.log("[UDP] Starting local UDP Server...")
+    logger.debug("[UDP] Starting local UDP Server...")
     const dgram = require('dgram')
     const server = dgram.createSocket('udp4')
     udp.server = server
 
     server.on('error', error => {
-      console.log(`[UDP] UDP server error:\n${error.stack}`)
+      logger.debug(`[UDP] UDP server error:\n${error.stack}`)
       server.close()
     });
 
@@ -5656,14 +5649,14 @@ const udp = {
         const response = await handleClientMessage(message, remote)
         sendResponse(response)
       } catch(e) {
-        console.log(e)
+        logger.debug(e)
       }
     });
 
     server.on('listening', () => {
       const connection = server.address();
       writeSettings({ udpPortActive: connection.port })
-      console.log(`[UDP] UDP server listening at ${connection.address}:${connection.port}`);
+      logger.debug(`[UDP] UDP server listening at ${connection.address}:${connection.port}`);
     });
 
     // Bind to default port, or another if it fails
@@ -5679,7 +5672,7 @@ const udp = {
           // Okay, one more?
           server.bind({ address, port: (port + 1603) })
         } catch (e3) {
-          console.log(e3)
+          logger.debug(e3)
         }
       }
     }
@@ -5688,12 +5681,12 @@ const udp = {
   stop: function () {
     try {
       if (udp.server) {
-        console.log("[UDP] Stopping local UDP Server.")
+        logger.debug("[UDP] Stopping local UDP Server.")
         udp.server.close()
         udp.server = false
       }
     } catch (e) {
-      console.log("[UDP] Couldn't close UDP server.")
+      logger.debug("[UDP] Couldn't close UDP server.")
     }
   }
 }
@@ -5709,18 +5702,18 @@ const pipe = {
   start: function () {
     if (pipe.server) return false;
 
-    console.log("[PIPE] Starting named pipe...")
+    logger.debug("[PIPE] Starting named pipe...")
 
     const server = require('net').createServer(function(stream) {
       stream.on('data', async function(message) {
 
-        console.log('server data:', message.toString());
+        logger.debug('server data:', message.toString());
         const sendResponse = response => stream.write(`${response}`)
         try {
           const response = await handleClientMessage(message)
           sendResponse(response)
         } catch(e) {
-          console.log(e)
+          logger.debug(e)
         }
 
       });
@@ -5729,20 +5722,20 @@ const pipe = {
     pipe.server = server
 
     server.on('error', error => {
-      console.log(`[PIPE] Server error:\n${error.stack}`)
+      logger.debug(`[PIPE] Server error:\n${error.stack}`)
       server.close()
     });
 
     server.on('listening', () => {
       const connection = server.address();
-      console.log(`[PIPE] Server listening at ${connection.toString()}`);
+      logger.debug(`[PIPE] Server listening at ${connection.toString()}`);
     });
 
     // Bind to default port, or another if it fails
     try {
       server.listen('\\\\.\\pipe\\twinkle-tray\\cmds');
     } catch (e) {
-      console.log(e)
+      logger.debug(e)
     }
 
   },
@@ -5750,7 +5743,7 @@ const pipe = {
     try {
       if (pipe.server) pipe.server.close();
     } catch (e) {
-      console.log("[PIPE] Couldn't close server.")
+      logger.debug("[PIPE] Couldn't close server.")
     }
   }
 }
