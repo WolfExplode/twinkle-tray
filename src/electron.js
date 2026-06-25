@@ -22,6 +22,7 @@ const AdjustmentTimes = require("./adjustmentTimes")
 const MonitorFocus = require("./monitorFocus")
 const MonitorTransforms = require("./monitorTransforms")
 const Profiles = require("./profiles")
+const UpdateCheck = require("./updateCheck")
 const logger = require('./logger') // init()'d in the Logging block below once logPath is known
 
 const configFilesDir = (isPortable ? path.join(__dirname, "../../config/") : app.getPath("userData"))
@@ -4183,44 +4184,23 @@ const checkForUpdates = async (force = false) => {
     if (lastCheck && lastCheck == new Date().getDate()) return false;
   }
   if (isPortable || isAppX) return false;
+  // lastCheck stores the day-of-month of the last check, so an automatic
+  // (non-forced) check runs at most once per calendar day.
   lastCheck = new Date().getDate()
   try {
-    if (isAppX === false) {
-      logger.debug("Checking for updates...")
-      fetch("https://api.github.com/repos/xanderfrangos/twinkle-tray/releases").then((response) => {
-        response.json().then((releases) => {
-          let foundVersion = false
-          for (let release of releases) {
-            if (!(settings.branch === "master" && release.prerelease === true)) {
+    logger.debug("Checking for updates...")
+    const response = await fetch("https://api.github.com/repos/xanderfrangos/twinkle-tray/releases")
+    const releases = await response.json()
+    const found = UpdateCheck.pickLatestRelease(releases, { branch: settings.branch, currentVersion: app.getVersion() })
 
-              // Skip versions older than current
-              const versionParsed =  Utils.getVersionValue(release.tag_name)
-              const appVersionValue = Utils.getVersionValue(`v${app.getVersion()}`)
-              if(versionParsed < appVersionValue) continue;
-
-              foundVersion = true
-              latestVersion = {
-                releaseURL: (release.html_url),
-                version: release.tag_name,
-                downloadURL: release.assets[0]["browser_download_url"],
-                filesize: release.assets[0]["size"],
-                changelog: release.body,
-                show: false,
-                error: false
-              }
-              logger.debug("Found version: " + latestVersion.version)
-              break
-            }
-          }
-
-          if (foundVersion && "v" + appVersion != latestVersion.version && (settings.dismissedUpdate != latestVersion.version || force)) {
-            if (!force) latestVersion.show = true
-            logger.debug("Sending new version to windows.")
-            sendToAllWindows('latest-version', latestVersion)
-          }
-
-        })
-      });
+    if (found) {
+      latestVersion = found
+      logger.debug("Found version: " + latestVersion.version)
+      if ("v" + appVersion != latestVersion.version && (settings.dismissedUpdate != latestVersion.version || force)) {
+        if (!force) latestVersion.show = true
+        logger.debug("Sending new version to windows.")
+        sendToAllWindows('latest-version', latestVersion)
+      }
     }
   } catch (e) {
     logger.debug(e)
@@ -4269,6 +4249,8 @@ const getLatestUpdate = async (version) => {
       let lastSizeUpdate = 0
       readableNodeStream.on('data', (chunk) => {
         size += chunk.length
+        // Close the file once we've written the expected number of bytes;
+        // the 'close' handler above then launches the installer.
         dest.write(chunk, (err) => {
           if (size >= version.filesize) {
             dest.close()
@@ -4306,7 +4288,7 @@ function runUpdate(expectedSize = false) {
       } catch (e) {
         throw ("Couldn't delete update file. " + e)
       }
-      logger.debug("Atempted to delete update file")
+      logger.debug("Attempted to delete update file")
       throw (`Update is wrong file size! Expected: ${expectedSize}. Got: ${fileSize}`)
     }
 
