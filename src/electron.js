@@ -2942,8 +2942,11 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
     webPreferences: {
       preload: path.join(__dirname, 'panel-preload.js'),
       devTools: settings.isDev,
-      nodeIntegration: true,
-      contextIsolation: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      // Preload needs Node (os priority, gc, launch args); contextIsolation
+      // keeps the renderer itself isolated and Node-free.
+      sandbox: false,
       plugins: false,
       backgroundThrottling: (settings.disableThrottling ? false : true),
       spellcheck: false,
@@ -2957,9 +2960,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
         appVersionTag: appVersionTag,
         appBuild: appBuildShort,
         isRefreshing: isRefreshing
-      })).toString('base64')],
-      allowRunningInsecureContent: true,
-      webSecurity: false
+      })).toString('base64')]
     }
   });
 
@@ -4071,9 +4072,9 @@ function showIntro() {
     webPreferences: {
       preload: path.join(__dirname, 'intro-preload.js'),
       devTools: settings.isDev,
-      nodeIntegration: true,
+      nodeIntegration: false,
       zoomFactor: 1.0,
-      contextIsolation: false
+      contextIsolation: true
     }
   });
 
@@ -4141,10 +4142,11 @@ function createSettings() {
     webPreferences: {
       preload: path.join(__dirname, 'settings-preload.js'),
       devTools: settings.isDev,
-      nodeIntegration: true,
-      contextIsolation: false,
-      allowRunningInsecureContent: true,
-      webSecurity: false,
+      nodeIntegration: false,
+      contextIsolation: true,
+      // Preload needs Node (decodes launch args); contextIsolation keeps the
+      // renderer itself isolated and Node-free.
+      sandbox: false,
       zoomFactor: 1.0,
       additionalArguments: ["jsVars" + Buffer.from(JSON.stringify({
         appName: app.name,

@@ -1,42 +1,15 @@
-const { ipcRenderer: ipc } = require('electron');
+// Thin Node bridge for the intro window.
+//
+// Runs in the isolated world under contextIsolation. Its only job is to hand
+// the page a minimal, audited IPC surface via contextBridge. All DOM/event/UI
+// logic now lives in the renderer (renderer/introBridge.js) because, with
+// isolation on, the page cannot see anything we set on this preload's `window`.
+const { contextBridge, ipcRenderer } = require('electron')
 
-window.closeIntro = () => {
-    ipc.send('close-intro')
-}
-
-function detectSunValley() {
-    try {
-        // Detect new Fluent Icons (Windows build 21327+)
-        if(document.fonts.check("12px Segoe Fluent Icons")) {
-            window.document.body.dataset.fluentIcons = true
-            window.document.body.dataset.isWin11 = true
-        } else {
-            window.document.body.dataset.fluentIcons = false
-        }
-        // Detect new system font (Windows build 21376+)
-        if(document.fonts.check("12px Segoe UI Variable Text")) {
-            window.document.body.dataset.segoeUIVariable = true
-        } else {
-            window.document.body.dataset.segoeUIVariable = false
-        }
-    } catch(e) {
-        console.log("Couldn't test for Sun Valley", e)
-    }
-}
-
-window.addEventListener('load', () => {
-    ipc.send('request-localization')
-    detectSunValley()
-    setTimeout(() => {
-        document.getElementById("video").play()
-    }, 2400)
+contextBridge.exposeInMainWorld('ipc', {
+  send: (channel, ...args) => ipcRenderer.send(channel, ...args),
+  // The page's callback receives (event, ...args). The real IpcRendererEvent
+  // isn't cloneable across contextBridge, and existing handlers ignore it, so
+  // pass null in its slot to preserve the (event, ...args) argument positions.
+  on: (channel, listener) => ipcRenderer.on(channel, (event, ...args) => listener(null, ...args))
 })
-
-// Localization recieved
-ipc.on('localization-updated', (event, localization) => {
-    window.dispatchEvent(new CustomEvent('localizationUpdated', {
-        detail: localization
-    }))
-})
-
-window.ipc = ipc
