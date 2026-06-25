@@ -1011,10 +1011,10 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.checkForUpdates !== undefined) {
       if (newSettings.checkForUpdates === false) {
-        latestVersion = false
-        sendToAllWindows('latest-version', latestVersion);
+        store.update("updates", { latestVersion: false })
+        broadcastLatestVersion();
       } else {
-        lastCheck = false
+        store.update("updates", { lastCheck: false })
       }
     }
 
@@ -1032,7 +1032,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     }
 
     if (newSettings.branch) {
-      lastCheck = false
+      store.update("updates", { lastCheck: false })
       settings.dismissedUpdate = false
       checkForUpdates()
     }
@@ -2836,7 +2836,7 @@ ipcMain.on('open-url', (event, url) => {
 })
 
 ipcMain.on('get-update', (event, version) => {
-  latestVersion.error = false
+  store.get("updates").latestVersion.error = false
   getLatestUpdate(version)
 })
 
@@ -4022,7 +4022,7 @@ const toggleTray = async (doRefresh = true, isOverlay = false) => {
 
     // Send accent
     sendToAllWindows('update-colors', getAccentColors())
-    if (latestVersion) sendToAllWindows('latest-version', latestVersion);
+    if (store.get("updates").latestVersion) broadcastLatestVersion();
   }
 
   if (mainWindow) {
@@ -4250,17 +4250,27 @@ ipcMain.on("windowClose", e => {
 
 
 
-let latestVersion = false
-let lastCheck = false
+// updates slice (store-owned): latestVersion is the newest release found (or
+// false), broadcast to renderers as 'latest-version'; lastCheck is the
+// day-of-month of the last automatic check (throttles auto-checks to once/day).
+// Both reassigned through the store; latestVersion's flags (show/downloading/
+// error) are mutated in place on the slice's object.
+store.update("updates", { latestVersion: false, lastCheck: false })
+
+function broadcastLatestVersion() {
+  sendToAllWindows('latest-version', store.get("updates").latestVersion)
+}
+
 const checkForUpdates = async (force = false) => {
   if (!force) {
     if (!settings.checkForUpdates) return false;
+    const lastCheck = store.get("updates").lastCheck
     if (lastCheck && lastCheck == new Date().getDate()) return false;
   }
   if (isPortable || isAppX) return false;
   // lastCheck stores the day-of-month of the last check, so an automatic
   // (non-forced) check runs at most once per calendar day.
-  lastCheck = new Date().getDate()
+  store.update("updates", { lastCheck: new Date().getDate() })
   try {
     logger.debug("Checking for updates...")
     const response = await fetch("https://api.github.com/repos/xanderfrangos/twinkle-tray/releases")
@@ -4268,12 +4278,13 @@ const checkForUpdates = async (force = false) => {
     const found = UpdateCheck.pickLatestRelease(releases, { branch: settings.branch, currentVersion: app.getVersion() })
 
     if (found) {
-      latestVersion = found
+      store.update("updates", { latestVersion: found })
+      const latestVersion = found
       logger.debug("Found version: " + latestVersion.version)
       if ("v" + appVersion != latestVersion.version && (settings.dismissedUpdate != latestVersion.version || force)) {
         if (!force) latestVersion.show = true
         logger.debug("Sending new version to windows.")
-        sendToAllWindows('latest-version', latestVersion)
+        broadcastLatestVersion()
       }
     }
   } catch (e) {
@@ -4283,12 +4294,13 @@ const checkForUpdates = async (force = false) => {
 
 
 const getLatestUpdate = async (version) => {
+  const latestVersion = store.get("updates").latestVersion
   try {
     logger.debug("Downloading update from: " + version.downloadURL)
     const fs = require('fs');
 
     latestVersion.downloading = true
-    sendToAllWindows('latest-version', latestVersion)
+    broadcastLatestVersion()
 
     // Remove old update
     if (fs.existsSync(updatePath)) {
@@ -4343,7 +4355,7 @@ const getLatestUpdate = async (version) => {
     logger.debug("Couldn't download update!", e)
     latestVersion.show = true
     latestVersion.downloading = false
-    sendToAllWindows('latest-version', latestVersion)
+    broadcastLatestVersion()
   }
 }
 
@@ -4386,28 +4398,29 @@ function runUpdate(expectedSize = false) {
     app.quit()
   } catch (e) {
     logger.debug(e)
+    const latestVersion = store.get("updates").latestVersion
     latestVersion.show = true
     latestVersion.error = true
-    sendToAllWindows('latest-version', latestVersion)
+    broadcastLatestVersion()
   }
 
 }
 
 ipcMain.on('check-for-updates', () => {
-  latestVersion.error = false
-  sendToAllWindows('latest-version', latestVersion)
+  store.get("updates").latestVersion.error = false
+  broadcastLatestVersion()
   checkForUpdates(true)
 })
 
 ipcMain.on('ignore-update', (event, dismissedUpdate) => {
   writeSettings({ dismissedUpdate })
-  latestVersion.show = false
-  sendToAllWindows('latest-version', latestVersion)
+  store.get("updates").latestVersion.show = false
+  broadcastLatestVersion()
 })
 
 ipcMain.on('clear-update', (event, dismissedUpdate) => {
-  latestVersion.show = false
-  sendToAllWindows('latest-version', latestVersion)
+  store.get("updates").latestVersion.show = false
+  broadcastLatestVersion()
 })
 
 
