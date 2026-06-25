@@ -449,7 +449,11 @@ store.update("monitors", { all: {}, lastKnownDisplays: undefined })
 const monitors = store.get("monitors").all
 let mainWindow;
 let tray = null
-let lastTheme = false
+// theme slice (store-owned): lastTheme holds the Windows theme registry values
+// (light/dark, transparency, accent) broadcast to renderers as 'theme-settings'.
+// Reassigned via the store; readers take a local snapshot at the top of their
+// function. Starts false until the first registry read.
+store.update("theme", { lastTheme: false })
 
 const panelSize = {
   width: 356,
@@ -825,7 +829,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (settings.theme) {
       nativeTheme.themeSource = determineTheme(settings.theme)
-      sendToAllWindows('theme-settings', lastTheme)
+      broadcastThemeSettings()
     }
 
     handleAccentChange()
@@ -985,13 +989,13 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         settings.isWin11 = isReallyWin11
       }
       newSettings.useAcrylic = settings.useAcrylic
-      sendToAllWindows('theme-settings', lastTheme)
+      broadcastThemeSettings()
       doRestartPanel = true
     }
 
     if (newSettings.useAcrylic !== undefined) {
-      lastTheme["UseAcrylic"] = newSettings.useAcrylic
-      sendToAllWindows('theme-settings', lastTheme)
+      store.get("theme").lastTheme["UseAcrylic"] = newSettings.useAcrylic
+      broadcastThemeSettings()
       if(newSettings.useAcrylic) {
         store.update("mica", { currentWallpaperTime: false })
         sendMicaWallpaper()
@@ -1520,6 +1524,7 @@ function minMax(value, min = 0, max = 100) {
 }
 
 function determineTheme(themeName) {
+  const lastTheme = store.get("theme").lastTheme
   theme = themeName.toLowerCase()
   if (theme === "dark" || theme === "light") return theme;
   if (lastTheme && lastTheme.SystemUsesLightTheme) {
@@ -1994,10 +1999,15 @@ ipcMain.on('open-settings-file', () => {
 })
 
 // Get the user's Windows Personalization settings
+function broadcastThemeSettings() {
+  const lastTheme = store.get("theme").lastTheme
+  if (lastTheme) sendToAllWindows('theme-settings', lastTheme)
+}
+
 async function getThemeRegistry() {
   logger.debug("Function: getThemeRegistry");
 
-  if (lastTheme) sendToAllWindows('theme-settings', lastTheme)
+  broadcastThemeSettings()
 
   const themeSettings = {};
   try {
@@ -2020,7 +2030,7 @@ async function getThemeRegistry() {
 
   // Send it off!
   sendToAllWindows('theme-settings', themeSettings)
-  lastTheme = themeSettings
+  store.update("theme", { lastTheme: themeSettings })
   if (tray) {
     tray.setImage(getTrayIconPath())
   }
@@ -2051,6 +2061,7 @@ async function getThemeRegistry() {
 }
 
 function getTrayIconPath() {
+  const lastTheme = store.get("theme").lastTheme
   const themeDir = (lastTheme && lastTheme.SystemUsesLightTheme ? 'light' : 'dark')
   let icon = "icon";
   if (settings.icon === "mdl2" || settings.icon === "fluent") {
@@ -2849,6 +2860,7 @@ ipcMain.on('blur-panel', () => {
 })
 
 ipcMain.on('show-acrylic', () => {
+  const lastTheme = store.get("theme").lastTheme
   if (settings.useAcrylic && !settings.useNativeAnimation) {
     if (lastTheme && lastTheme.ColorPrevalence) {
       tryVibrancy(mainWindow, { theme: getAccentColors().dark + (settings.useAcrylic ? "D0" : "70"), effect: (settings.useAcrylic ? "acrylic" : "blur") })
@@ -3435,6 +3447,7 @@ let easeOutQuad = t => 1 + (--t) * t * t * t * t
 
 // Set brightness panel state (visible or not)
 function showPanel(show = true, height = 300) {
+  const lastTheme = store.get("theme").lastTheme
 
   if (show) {
     // Show panel
@@ -4099,7 +4112,7 @@ function showIntro() {
   introWindow.once('ready-to-show', () => {
     introWindow.setMenu(windowMenu)
     introWindow.show()
-    if (lastTheme) sendToAllWindows('theme-settings', lastTheme)
+    broadcastThemeSettings()
   })
 
 }
@@ -4124,6 +4137,7 @@ ipcMain.on('close-intro', (event, newSettings) => {
 
 let settingsWindow
 function createSettings() {
+  const lastTheme = store.get("theme").lastTheme
 
   if (settingsWindow != null) {
     // Don't make window if already open
