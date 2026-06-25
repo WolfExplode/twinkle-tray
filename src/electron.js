@@ -4752,8 +4752,7 @@ function idleCheckShort() {
           for (const monitorId of monitorFocusDimmed) {
             updateSoftwareDim(monitorId, 0)
           }
-          monitorLastVisited = {}
-          monitorPreDimBrightness = {}
+          clearMonitorFocusMaps()
           monitorFocusDimmed.clear()
         }
 
@@ -4771,12 +4770,19 @@ function idleCheckShort() {
 
 // Per-monitor inactive dimming
 let monitorFocusInterval = null
-let monitorLastVisited = {}
-let monitorPreDimBrightness = {}
-// focus slice (store-owned): the set of monitors currently focus-dimmed.
-// Stable Set reference aliased from the slice; cleared in place (never reassigned).
-store.update("focus", { monitorFocusDimmed: new Set() })
+// focus slice (store-owned): monitor-focus (inactive-dim) state. All three are
+// stable references aliased below and mutated in place — the Set via .clear(),
+// the maps via per-key writes/deletes (cleared by deleting keys, not reassigning,
+// so the aliases stay valid).
+store.update("focus", { monitorFocusDimmed: new Set(), monitorLastVisited: {}, monitorPreDimBrightness: {} })
 const monitorFocusDimmed = store.get("focus").monitorFocusDimmed
+const monitorLastVisited = store.get("focus").monitorLastVisited
+const monitorPreDimBrightness = store.get("focus").monitorPreDimBrightness
+
+function clearMonitorFocusMaps() {
+  for (const k in monitorLastVisited) delete monitorLastVisited[k]
+  for (const k in monitorPreDimBrightness) delete monitorPreDimBrightness[k]
+}
 let electronToMonitorMap = {}
 let cachedElectronDisplays = null
 
@@ -4992,8 +4998,7 @@ function resetMonitorFocusState() {
     }
     updateSoftwareDim(monitorId, 0)
   }
-  monitorLastVisited = {}
-  monitorPreDimBrightness = {}
+  clearMonitorFocusMaps()
   monitorFocusDimmed.clear()
   electronToMonitorMap = {}
 }
