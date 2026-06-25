@@ -2152,7 +2152,7 @@ const refreshMonitorsJob = async (fullRefresh = false) => {
 
         // Attempt to fix common issue with wmi-bridge by relying only on Win32
         // However, if user re-enables WMI, don't disable it again
-        if (!settings.autoDisabledWMI && !recentlyWokeUp) {
+        if (!settings.autoDisabledWMI && !store.get("power").recentlyWokeUp) {
           settings.autoDisabledWMI = true
           settings.disableWMI = true
         }
@@ -2574,7 +2574,7 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
     : Object.keys(monitors).length
 
   currentTransition = setInterval(() => {
-    if (recentlyWokeUp || store.get("idle").isWindowsUserIdle) clearInterval(currentTransition);
+    if (store.get("power").recentlyWokeUp || store.get("idle").isWindowsUserIdle) clearInterval(currentTransition);
     let numDone = 0
     for (let key in monitors) {
       const monitor = monitors[key]
@@ -3072,12 +3072,12 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
         if(store.get("idle").isWindowsUserIdle) {
           store.update("idle", { isWindowsUserIdle: false })
           logger.debug("Displays have woken up.")
-          recentlyWokeUp = true
+          store.update("power", { recentlyWokeUp: true })
           handleMetricsChange("GUID_SESSION_USER_PRESENCE")
           setTimeout(showSoftwareDimOverlays, 500)
           setTimeout(showDisplayColorEffects, 500)
           setTimeout(() => {
-            recentlyWokeUp = false
+            store.update("power", { recentlyWokeUp: false })
           },
             15000
           )
@@ -4523,8 +4523,11 @@ function handleMonitorChange(t, e, d) {
 
 }
 
-// Monitor system power/lock state to avoid accidentally tripping the WMI auto-disabler
-let recentlyWokeUp = false
+// power slice (store-owned): recentlyWokeUp gates brightness ops for a short
+// window after resume/suspend/lock so we don't trip the WMI auto-disabler or
+// fight the display while it is still coming back. Read across refresh,
+// transitions and the power events; reassigned through the store.
+store.update("power", { recentlyWokeUp: false })
 
 // Handle resume from sleep/hibernation
 powerMonitor.on("resume", () => {
@@ -4532,8 +4535,8 @@ powerMonitor.on("resume", () => {
   stopMonitorThread()
   const block = blockBadDisplays("powerMonitor:resume")
   setRecentlyInteracted(false)
-  recentlyWokeUp = true
-  setTimeout(() => { recentlyWokeUp = false }, 15000)
+  store.update("power", { recentlyWokeUp: true })
+  setTimeout(() => { store.update("power", { recentlyWokeUp: false }) }, 15000)
 
   if(settings.restartOnWake) {
   // Screw it, just restart the whole app.
@@ -4603,17 +4606,17 @@ function handleMetricsChange(type) {
 }
 
 
-powerMonitor.on("suspend", () => { logger.debug("Event: suspend"); recentlyWokeUp = true; stopMonitorThread() })
+powerMonitor.on("suspend", () => { logger.debug("Event: suspend"); store.update("power", { recentlyWokeUp: true }); stopMonitorThread() })
 powerMonitor.on("lock-screen", () => {
   logger.debug("Event: lock-screen");
-  if (settings.disableOnLockScreen) recentlyWokeUp = true
+  if (settings.disableOnLockScreen) store.update("power", { recentlyWokeUp: true })
 })
 powerMonitor.on("unlock-screen", () => {
   logger.debug("Event: unlock-screen");
-  if (recentlyWokeUp) {
+  if (store.get("power").recentlyWokeUp) {
     if (!settings.disableAutoRefresh) handleMetricsChange("unlock-screen");
     setTimeout(() => {
-      recentlyWokeUp = false
+      store.update("power", { recentlyWokeUp: false })
     },
       15000
     )
