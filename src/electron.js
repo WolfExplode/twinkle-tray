@@ -3110,7 +3110,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
 }
 
 function currentOverlayType() {
-  let overlayType = currentProfile?.overlayType
+  let overlayType = store.get("profile").currentProfile?.overlayType
   if(!overlayType || overlayType == "normal") {
     overlayType = settings.defaultOverlayType
   }
@@ -3301,14 +3301,18 @@ function repositionPanel() {
 
 
 let forcedFocusID = 0
-let currentProfile
+// profile slice (store-owned): the window-focus profile feature's state.
+// currentProfile is the profile matched to the current foreground window (or
+// undefined); preProfileBrightness snapshots brightness before a profile is
+// applied so the previous levels can be restored. Both are reassigned values,
+// read and written through the store.
+store.update("profile", { currentProfile: undefined, preProfileBrightness: {} })
 const ignoreAppList = [
   "twinkletray.exe",
   "explorer.exe",
   "electron.exe"
 ]
 const windowHistory = []
-let preProfileBrightness = {}
 let focusTrackingID = 0
 function startFocusTracking() {
   if(focusTrackingID) return false; // Already tracking
@@ -3350,16 +3354,16 @@ function startFocusTracking() {
 
       // First, save current brightness for later
       await updateKnownDisplays(true, true)
-      preProfileBrightness = Object.assign({}, store.get("monitors").lastKnownDisplays)
+      store.update("profile", { preProfileBrightness: Object.assign({}, store.get("monitors").lastKnownDisplays) })
 
       // Then apply user profile brightness
       applyProfileBrightness(profile)
-    } else if (currentProfile?.setBrightness) {
+    } else if (store.get("profile").currentProfile?.setBrightness) {
       // Last profile had brightness settings
       // So we should restore the last known brightness
-      applyProfile(preProfileBrightness, false)
+      applyProfile(store.get("profile").preProfileBrightness, false)
     }
-    currentProfile = profile
+    store.update("profile", { currentProfile: profile })
   })
 
   logger.debug(`Starting focus tracking... (#${focusTrackingID})`)
@@ -5024,7 +5028,7 @@ function getSunCalcTime(timeName = "solarNoon") {
 // If applicable, apply the current Time of Day Adjustment
 function applyCurrentAdjustmentEvent(force = false, instant = true) {
   try {
-    if (tempSettings.pauseTimeAdjustments || !settings.adjustmentTimesActive || currentProfile?.setBrightness) return false;
+    if (tempSettings.pauseTimeAdjustments || !settings.adjustmentTimesActive || store.get("profile").currentProfile?.setBrightness) return false;
     if (settings.adjustmentTimes.length === 0 || store.get("idle").userIdleDimmed) return false;
 
     const date = new Date()
