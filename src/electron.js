@@ -1725,8 +1725,10 @@ function applyNavigationGuards(win) {
 // Software Dim Overlays
 //
 
-const softwareDimOverlays = {}
-const softwareDimLevels = {}
+const softwareDimOverlays = {} // overlay BrowserWindow handles (mechanism, not state)
+// Software-dim levels per monitor — stable map aliased from the "color" slice.
+store.update("color", { softwareDimLevels: {} })
+const softwareDimLevels = store.get("color").softwareDimLevels
 
 function getSoftwareDimDisplayBounds(monitorId) {
   const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
@@ -1814,17 +1816,20 @@ function showSoftwareDimOverlays() {
   }
 }
 
-const warmthLevels = {}
-const highlightLevels = {}
-// color slice (store-owned): the user's manual temperature/highlight state.
-// The level maps are stable references aliased from the slice (mutated in place);
-// the active flags are reassigned values read/written through the store.
+// color slice (store-owned). The level maps (effective warmth/highlight applied
+// per monitor, plus the user's manual levels) are stable references aliased from
+// the slice and mutated in place; the active flags are reassigned values read and
+// written through the store.
 store.update("color", {
+  warmthLevels: {},
+  highlightLevels: {},
   manualWarmthLevels: {},
   manualHighlightLevels: {},
   manualTemperatureActive: false,
   manualHighlightActive: false
 })
+const warmthLevels = store.get("color").warmthLevels
+const highlightLevels = store.get("color").highlightLevels
 const manualWarmthLevels = store.get("color").manualWarmthLevels
 const manualHighlightLevels = store.get("color").manualHighlightLevels
 
