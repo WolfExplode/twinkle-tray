@@ -1,6 +1,23 @@
-const tag = "\x1b[47m M \x1b[0m";
+// Forward this forked child's logs to the main process so they flow through
+// the single logger (and reach the log file). Falls back to local console when
+// running detached. The parent tags these as [MON].
+const util = require('util')
 const oLog = console.log
-console.log = (...args) => { args.unshift(tag); oLog(...args) }
+const oErr = console.error
+const fmtArgs = (args) => args.map(a =>
+  typeof a === 'string' ? a
+    : (a instanceof Error ? (a.stack || a.message) : util.inspect(a, { depth: 4, breakLength: 120 }))
+).join(' ')
+const forwardLog = (level) => (...args) => {
+  const message = fmtArgs(args)
+  if (process.send) {
+    try { process.send({ type: 'log', level, message }) } catch (e) { oLog(message) }
+  } else {
+    (level === 'error' ? oErr : oLog)(message)
+  }
+}
+console.log = forwardLog('debug')
+console.error = forwardLog('error')
 console.log("Monitors.js starting. If you see this again, something bad happened!")
 const w32disp = require("win32-displayconfig");
 const wmibridge = require("wmi-bridge");

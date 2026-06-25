@@ -7,7 +7,6 @@ const { priority } = require("os").constants
 setPriority(0, priority.PRIORITY_BELOW_NORMAL)
 
 // Send logs to main thread
-const log = console.log
 const con = {
     log: console.log,
     warn: console.warn,
@@ -280,12 +279,8 @@ ipc.on('isRefreshing', (event, newValue) => {
 
 // Settings recieved
 ipc.on('settings-updated', (event, settings) => {
-    if (settings.isDev == false) {
-        console.log = () => { }
-    } else {
-        console.log = log
-        console.log = (...e) => { e.forEach((c) => ipc.send('log', c)) }
-    }
+    // console.log is forwarded to the main logger once at module load; the main
+    // process decides what to persist by level, so we don't re-patch per update.
     window.settings = settings
     detectSunValley()
     window.dispatchEvent(new CustomEvent('settingsUpdated', {

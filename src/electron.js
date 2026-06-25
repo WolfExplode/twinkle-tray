@@ -176,6 +176,11 @@ function startMonitorThread() {
   monitorsThreadReal = fork(path.join(__dirname, 'Monitors.js'), ["--isdev=" + isDev, "--apppath=" + app.getAppPath(), "--skiptest=" + skipTest], { silent: false })
   monitorsThreadReal.on("message", (data) => {
     if (data?.type) {
+      if (data.type === "log") {
+        const lvl = (data.level && logger[data.level]) ? data.level : "debug"
+        logger[lvl]("[MON]", data.message)
+        return
+      }
       if (data.type === "ready") {
         monitorsThreadReady = true
         monitorsThreadStarting = false
