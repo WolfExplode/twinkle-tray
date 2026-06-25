@@ -1208,7 +1208,7 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
     }
   }
   
-  sendToAllWindows('monitors-updated', monitors);
+  touchMonitors();
 }
 
 
@@ -1345,7 +1345,7 @@ async function doHotkey(hotkey) {
               if (action.target === "brightness") {
                 const normalizedAdjust = minMax(value)
                 monitors[monitor.key].brightness = normalizedAdjust
-                sendToAllWindows('monitors-updated', monitors);
+                touchMonitors();
                 updateBrightnessThrottle(monitor.id, monitors[monitor.key].brightness, true, false)
                 pauseMonitorUpdates() // Stop incoming updates for a moment to prevent judder
 
@@ -1367,7 +1367,7 @@ async function doHotkey(hotkey) {
                   vcpCode = "0xD2"
                 }
                 updateBrightnessThrottle(monitor.id, parseInt(value), false, true, parseInt(vcpCode))
-                sendToAllWindows('monitors-updated', monitors);
+                touchMonitors();
               }
             }
           }
@@ -1699,6 +1699,21 @@ function sendToAllWindows(eventName, data) {
     introWindow.webContents.send(eventName, data)
   }
 }
+
+// Renderer sync for the monitors model. The map (`monitors`) is mutated in
+// place on hot paths (brightness/transition loops), so the store can't detect
+// those edits by value. Code that changes the map calls touchMonitors(), which
+// bumps a revision counter on the slice; the single subscriber below is the one
+// place that broadcasts the map to renderers. This replaces the scattered
+// sendToAllWindows('monitors-updated', ...) calls with one store-coordinated
+// broadcast point. Other monitors-slice writes (isRefreshing, lastKnownDisplays,
+// …) carry no `rev`, so they don't trigger a renderer broadcast.
+function touchMonitors() {
+  store.update("monitors", { rev: (store.get("monitors").rev ?? 0) + 1 })
+}
+store.subscribe("monitors", (diff) => {
+  if ("rev" in diff) sendToAllWindows("monitors-updated", monitors)
+})
 
 //
 // Window navigation security
@@ -2237,7 +2252,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     // Only send update if something changed
     if (JSON.stringify(newMonitors) !== JSON.stringify(oldMonitors)) {
       setTrayStatus()
-      sendToAllWindows('monitors-updated', monitors)
+      touchMonitors()
     } else {
       logger.debug("===--- NO CHANGE ---===")
     }
@@ -2287,7 +2302,7 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
   if (lastBrightnessTimes[id] === undefined || now >= lastBrightnessTimes[id] + settings.updateInterval) {
     lastBrightnessTimes[id] = now
     updateBrightness(id, level, useCap, vcp, clearTransition)
-    if (sendUpdate) sendToAllWindows('monitors-updated', monitors);
+    if (sendUpdate) touchMonitors();
     return true
   } else if (!updateBrightnessTimeout) {
     lastBrightnessTimes[id] = now
@@ -2303,7 +2318,7 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
         }
       }
       updateBrightnessTimeout = false
-      if (sendUpdate) sendToAllWindows('monitors-updated', monitors);
+      if (sendUpdate) touchMonitors();
     }, settings.updateInterval)
   }
   return false
@@ -2501,7 +2516,7 @@ function updateAllBrightness(brightness, mode = "offset") {
   }
 
   // Update UI
-  sendToAllWindows('monitors-updated', monitors);
+  touchMonitors();
 
   // Send brightness updates
   for (let key in monitors) {
@@ -2572,7 +2587,7 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
       } else {
         updateBrightness(monitor.id, (monitor.brightness < normalized ? monitor.brightness + step : monitor.brightness - step), undefined, undefined, false)
       }
-      sendToAllWindows('monitors-updated', monitors)
+      touchMonitors()
       if (numDone === targetMonitorCount) {
         clearInterval(currentTransition);
         currentTransition = null
@@ -2628,7 +2643,7 @@ function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 
     if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
     if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
     if (Object.keys(colorUpdates).length) updateDisplayColor(monitor.id, colorUpdates)
-    sendToAllWindows('monitors-updated', monitors)
+    touchMonitors()
   }
 }
 
@@ -2771,14 +2786,14 @@ ipcMain.on('request-schedule-lock-state', () => {
 })
 
 ipcMain.on('request-monitors', function (event, arg) {
-  sendToAllWindows("monitors-updated", monitors)
+  touchMonitors()
   //refreshMonitors(false, true)
 })
 
 ipcMain.on('full-refresh', function (event, forceUpdate = false) {
   refreshMonitors(true).then(() => {
     if (forceUpdate) {
-      sendToAllWindows('monitors-updated', monitors)
+      touchMonitors()
     }
   })
 })
@@ -3002,7 +3017,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
 
   mainWindow.webContents.once('dom-ready', () => {
     try {
-      sendToAllWindows('monitors-updated', monitors)
+      touchMonitors()
       // Do full refreshes shortly after startup in case Windows isn't ready.
 
       setTimeout(sendMicaWallpaper, 1000)
@@ -3071,7 +3086,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
             monitor.brightness = normalized
             monitor.brightnessRaw = setting.data
           }
-          sendToAllWindows('monitors-updated', monitors)
+          touchMonitors()
         }
       }
     }
@@ -3370,7 +3385,7 @@ function applyProfileBrightness(profile) {
     Object.values(monitors)?.forEach(monitor => {
       updateBrightness(monitor.id, profile.monitors[monitor.id], true, "brightness")
     })
-    sendToAllWindows('monitors-updated', monitors)
+    touchMonitors()
   } catch (e) {
     logger.debug("Error applying profile brightness", e)
   }
@@ -4858,7 +4873,7 @@ function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDi
       uiUpdated = true
     }
 
-    if (uiUpdated) sendToAllWindows('monitors-updated', monitors)
+    if (uiUpdated) touchMonitors()
   }, TICK_MS)
 }
 
@@ -4884,7 +4899,7 @@ function restoreMonitorFocusBrightness(monitor) {
   monitorFocusDimmed.delete(monitor.id)
   delete monitor.inactiveDimmed
   delete monitorPreDimBrightness[monitor.id]
-  sendToAllWindows('monitors-updated', monitors)
+  touchMonitors()
   return true
 }
 
