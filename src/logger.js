@@ -1,8 +1,7 @@
 // Centralized logger for the main process.
 //
-// Replaces the scattered `console.log` monkeypatching that used to live in
-// electron.js. Provides leveled logging (debug/info/warn/error), ISO
-// timestamps, a source tag, structured object output, and a rotating log file.
+// Provides leveled logging (debug/info/warn/error), ISO timestamps, a source
+// tag, structured object output, and a rotating log file.
 //
 // Console output keeps ANSI colors; the file is always ANSI-stripped so it
 // stays readable in a text viewer. Levels below the configured threshold are

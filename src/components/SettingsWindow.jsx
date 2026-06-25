@@ -299,10 +299,6 @@ export default class SettingsWindow extends PureComponent {
             }
         }
 
-        const oldData = JSON.stringify(this.state.remaps);
-        const newData = JSON.stringify(remaps);
-        const hasChanged = (oldData == newData ? false : true);
-        //if(!hasChanged) return false;
         this.setState({ remaps })
         window.sendSettings({ remaps })
     }
@@ -823,7 +819,6 @@ export default class SettingsWindow extends PureComponent {
         }
         this.state.adjustmentTimes[index].time = arr
 
-        //this.forceUpdate()
         this.adjustmentTimesUpdated()
     }
 

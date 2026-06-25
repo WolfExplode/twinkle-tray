@@ -53,7 +53,6 @@ if(app.commandLine.hasSwitch("show-console")) {
 }
 
 const { Readable } = require("node:stream")
-//require("os").setPriority(0, require("os").constants.priority.PRIORITY_BELOW_NORMAL)
 const { BrowserWindow, nativeTheme, systemPreferences, Menu, ipcMain, screen, globalShortcut, powerMonitor } = require('electron')
 const uuid = require('crypto').randomUUID
 
@@ -89,7 +88,6 @@ const { EventEmitter } = require("events");
 
 const isReallyWin11 = (require("os").release()?.split(".")[2] * 1) >= 22000
 
-let ddcciModeTestResult = "auto"
 // lastKnownDisplays lives in the "monitors" store slice (seeded at the monitors decl)
 
 const SunCalc = require('suncalc')
@@ -204,7 +202,6 @@ function startMonitorThread() {
         getLocalization()
       }
       if (data.type === "ddcciModeTestResult") {
-        ddcciModeTestResult = data.value
         settings.lastDetectedDDCCIMethod = (data.value ? "fast" : "accurate")
       }
       monitorsEventEmitter.emit(data.type, data)
@@ -329,7 +326,6 @@ function enableMouseEvents() {
           const delta = settings.invertScroll ? -Math.round(event.delta) : Math.round(event.delta);
           const amount = delta * settings.scrollShortcutAmount;
 
-          //refreshMonitors()
           setRecentlyInteracted(true)
           updateAllBrightness(amount)
 
@@ -801,7 +797,7 @@ function writeSettings(newSettings = {}, processAfter = true, sendUpdate = true)
 
 // Debounced disk persistence, subscribed to the settings slice (see init below).
 // Any store.update("settings", ...) — from writeSettings, reset, anywhere —
-// schedules a save; callers no longer write to disk directly.
+// schedules a save; this is the only place that writes settings to disk.
 let writeSettingsTimeout = false
 function persistSettings() {
   if (writeSettingsTimeout) return
@@ -1709,10 +1705,9 @@ function sendToAllWindows(eventName, data) {
 // place on hot paths (brightness/transition loops), so the store can't detect
 // those edits by value. Code that changes the map calls touchMonitors(), which
 // bumps a revision counter on the slice; the single subscriber below is the one
-// place that broadcasts the map to renderers. This replaces the scattered
-// sendToAllWindows('monitors-updated', ...) calls with one store-coordinated
-// broadcast point. Other monitors-slice writes (isRefreshing, lastKnownDisplays,
-// …) carry no `rev`, so they don't trigger a renderer broadcast.
+// place that broadcasts the map to renderers. Other monitors-slice writes
+// (isRefreshing, lastKnownDisplays, …) carry no `rev`, so they don't trigger a
+// renderer broadcast.
 function touchMonitors() {
   store.update("monitors", { rev: (store.get("monitors").rev ?? 0) + 1 })
 }
@@ -2677,7 +2672,6 @@ function sleepDisplays(mode = "ps", delayMS = 333) {
   try {
     if(sleepTimeout) clearTimeout(sleepTimeout);
     sleepTimeout = setTimeout(async () => {
-      //startIdleCheckShort()
       if (mode === "ddcci" || mode === "ps_ddcci") {
         for (let monitorID in monitors) {
           const monitor = monitors[monitorID]
@@ -2798,7 +2792,6 @@ ipcMain.on('request-schedule-lock-state', () => {
 
 ipcMain.on('request-monitors', function (event, arg) {
   touchMonitors()
-  //refreshMonitors(false, true)
 })
 
 ipcMain.on('full-refresh', function (event, forceUpdate = false) {
@@ -3064,7 +3057,6 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
           // If we were about to do a hardware event, stop.
           if (handleChangeTimeout1) clearTimeout(handleChangeTimeout1);
           if (handleChangeTimeout2) clearTimeout(handleChangeTimeout2);
-          //if(!isUserIdle) startIdleCheckShort();
         }
         store.update("idle", { isWindowsUserIdle: true })
       } else if(setting.data === 0) {
@@ -3112,7 +3104,6 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
       if(lParam.readUInt32LE() === 2) {
         // 2 = Display is being shut off
         logger.debug("Event: SC_MONITORPOWER")
-        //if(!isUserIdle) startIdleCheckShort();
       }
     }
   })
@@ -3661,7 +3652,6 @@ app.on("ready", async () => {
 
   await getAllLanguages()
   await getThemeRegistry()
-  //readSettings()
   getLocalization()
   showIntro()
   createPanel(false, true)
@@ -3702,15 +3692,9 @@ app.on("ready", async () => {
 
 })
 
-app.on("window-all-closed", () => {
-  //app.quit();
-});
-
-app.on("activate", () => {
-  if (mainWindow === null) {
-    //createPanel(true);
-  }
-});
+// Empty handler: overrides Electron's default of quitting when all windows
+// close, so the app keeps running in the tray.
+app.on("window-all-closed", () => {});
 
 app.on('quit', () => {
   try {
@@ -4010,11 +3994,6 @@ const toggleTray = async (doRefresh = true, isOverlay = false) => {
     return false
   }
 
-  if (store.get("monitors").isRefreshing) {
-    //shouldShowPanel = true
-    //return false
-  }
-
   if (doRefresh && !isOverlay) {
     tryEagerUpdate(false)
     getThemeRegistry()
@@ -4035,7 +4014,6 @@ const toggleTray = async (doRefresh = true, isOverlay = false) => {
         hotkeyOverlayHide()
         setTimeout(() => {
           sendToAllWindows("display-mode", "normal")
-          //toggleTray(doRefresh, isOverlay)
         }, 300)
         return false
       }
@@ -4660,7 +4638,6 @@ function getIdleSettingValue() {
 
 function idleCheckLong() {
   if (tempSettings.pauseIdleDetection) return false;
-  //if(powerMonitor.onBatteryPower) return false;
   const idleTime = powerMonitor.getSystemIdleTime()
   store.update("idle", { lastIdleTime: idleTime })
   if (idleTime >= (settings.detectIdleTimeEnabled ? getIdleSettingValue() : 180) && !notIdleMonitor) {

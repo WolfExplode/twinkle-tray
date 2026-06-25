@@ -1,11 +1,8 @@
 // Main-process state store: the single owner of application state.
 //
-// Built to fix the "state has no home" problem — state lived as ~111 mutable
-// module globals in electron.js, mutated from ~150 functions with no ownership
-// and synced to renderers via ad-hoc broadcasts. This store gives each slice of
-// state one owner: mutation happens only through `update`, which computes a diff
-// and emits a change event. Main-process code subscribes instead of polling
-// globals; renderers are driven from those subscriptions.
+// Each slice of state has one owner: mutation happens only through `update`,
+// which computes a diff and emits a change event. Main-process code subscribes
+// to changes; renderers are driven from those subscriptions.
 //
 // State is organised into named slices (e.g. "settings", "monitors", "panel").
 // `update` does a shallow merge and only emits when something actually changed,

@@ -138,8 +138,6 @@ module.exports = {
         if (args.ShowPanel) {
             console.log(`Showing panel`)
         } else if (args.List) {
-            //const displays = getKnownDisplays(knownDisplaysPath)
-
             const useUDP = (args.UseUDP ? true : false)
             const response = await (useUDP ? udpSendCommand : pipeSendCommand)("list", false, settings.udpPortActive, settings.udpKey)
             let displays = {}
