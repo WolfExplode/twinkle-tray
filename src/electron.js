@@ -3028,7 +3028,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
 
       setTimeout(sendMicaWallpaper, 1000)
       sendToAllWindows('panel-position', mainWindow.getPosition())
-    } catch (e) { }
+    } catch (e) { logger.error("dom-ready startup handler failed", e) }
   })
 
   mainWindow.hookWindowMessage(126, (wParam, lParam) => {
