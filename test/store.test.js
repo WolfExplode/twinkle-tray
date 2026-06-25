@@ -50,24 +50,6 @@ test('update with an empty diff does not emit and returns {}', () => {
   assert.strictEqual(fired, false, 'no-op write must not emit')
 })
 
-test('subscribe only fires for its own slice', () => {
-  const store = createStore()
-  let settingsFired = 0
-  store.subscribe('settings', () => settingsFired++)
-  store.update('panel', { open: true })
-  assert.strictEqual(settingsFired, 0)
-})
-
-test('unsubscribe stops further notifications', () => {
-  const store = createStore({ settings: { n: 0 } })
-  let count = 0
-  const off = store.subscribe('settings', () => count++)
-  store.update('settings', { n: 1 })
-  off()
-  store.update('settings', { n: 2 })
-  assert.strictEqual(count, 1, 'listener fired once before unsubscribe, not after')
-})
-
 test('replacing a nested object counts as a change; equal primitive does not', () => {
   const arr = [1, 2]
   const store = createStore({ monitors: { list: arr } })

@@ -1718,11 +1718,11 @@ store.subscribe("monitors", (diff) => {
 //
 // Window navigation security
 //
-// Renderer windows run with nodeIntegration enabled, so any in-window
-// navigation to untrusted content would gain Node/RCE access. Only internal
-// pages (the dev server or packaged files) may navigate in-window; every other
-// URL is blocked and handed to the OS browser instead. New-window requests are
-// always denied, with external URLs likewise routed to the OS browser.
+// Renderer windows run with contextIsolation on and nodeIntegration off, but
+// in-window navigation to untrusted content is still an attack surface, so only
+// internal pages (the dev server or packaged files) may navigate in-window;
+// every other URL is blocked and handed to the OS browser instead. New-window
+// requests are always denied, with external URLs likewise routed to the OS browser.
 
 function isInternalURL(url) {
   return typeof url === "string" && (url.startsWith("http://localhost:3000") || url.startsWith("file://"))

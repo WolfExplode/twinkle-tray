@@ -111,7 +111,7 @@ module.exports = {
             }
 
             // DDC/CI command
-            if (arg.indexOf("--vcp=") === 0 && arg.indexOf(":")) {
+            if (arg.indexOf("--vcp=") === 0 && arg.includes(":")) {
                 validArgs.VCP = true
             }
 
@@ -335,9 +335,10 @@ function getCalibratedValue(value, calibrationPoints = [], reverse = false) {
             const maxOutput = Math.max(p1.output, p2.output);
 
             if (value >= minOutput && value <= maxOutput) {
-                // Linear interpolation in reverse
+                // Flat segment (equal outputs) can't invert to one input; return the
+                // midpoint rather than dividing by zero (NaN). Reachable when the caller
+                // supplies explicit endpoints at input 0 and 100 with equal outputs.
                 if (p2.output === p1.output) {
-                    // If outputs are the same, return the midpoint input
                     return (p1.input + p2.input) / 2;
                 }
                 const ratio = (value - p1.output) / (p2.output - p1.output);

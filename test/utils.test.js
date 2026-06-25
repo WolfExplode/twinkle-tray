@@ -84,3 +84,74 @@ test('upgradeAdjustmentTimes sets monitors to empty object when field is missing
   const upgraded = Utils.upgradeAdjustmentTimes(legacy)
   assert.deepStrictEqual(upgraded[0].monitors, {})
 })
+
+// --- getCalibratedValue: reverse and piecewise edge cases ---
+
+test('getCalibratedValue reverse map with piecewise points', () => {
+  // forward 0→0, 50→80, 100→100; reverse output 40 sits halfway up the 0→80 leg => input 25
+  const points = [{ input: 0, output: 0 }, { input: 50, output: 80 }, { input: 100, output: 100 }]
+  assert.strictEqual(Utils.getCalibratedValue(40, points, true), 25)
+  assert.strictEqual(Utils.getCalibratedValue(90, points, true), 75)
+})
+
+test('getCalibratedValue reverse maps a fully flat curve to the midpoint instead of NaN', () => {
+  // A monitor pinned to one output across the whole range: explicit endpoints at
+  // input 0 and 100 share output 50, so no implicit endpoints are injected and the
+  // flat segment is the first match. Must return a finite midpoint, not 0/0.
+  const points = [{ input: 0, output: 50 }, { input: 100, output: 50 }]
+  assert.strictEqual(Utils.getCalibratedValue(50, points, true), 50)
+})
+
+test('getCalibratedValue injects implicit 0 and 100 endpoints', () => {
+  // Only a single midpoint supplied; the function adds {0,0} and {100,100} so the
+  // ends still map. Below the supplied point we interpolate against the implicit {0,0}.
+  const points = [{ input: 50, output: 80 }]
+  assert.strictEqual(Utils.getCalibratedValue(0, points), 0)
+  assert.strictEqual(Utils.getCalibratedValue(25, points), 40)
+  assert.strictEqual(Utils.getCalibratedValue(50, points), 80)
+})
+
+// --- processArgs: command-line flag parsing ---
+
+test('processArgs parses standalone flags', () => {
+  assert.deepStrictEqual(
+    Utils.processArgs(["--udp", "--list", "--usetime", "--overlay", "--panel"]),
+    { UseUDP: true, List: true, UseTime: true, ShowOverlay: true, ShowPanel: true }
+  )
+})
+
+test('processArgs reads monitor number and id as separate fields', () => {
+  const args = Utils.processArgs(["--monitornum=2", "--monitorid=UID2353"])
+  assert.strictEqual(args.MonitorNum, 2)
+  // IDs are lower-cased because every arg is lower-cased before matching.
+  assert.strictEqual(args.MonitorID, "uid2353")
+})
+
+test('processArgs distinguishes absolute set from relative offset', () => {
+  assert.deepStrictEqual(Utils.processArgs(["--set=95"]), { Brightness: 95, BrightnessType: "set" })
+  assert.deepStrictEqual(Utils.processArgs(["--offset=-20"]), { Brightness: -20, BrightnessType: "offset" })
+})
+
+test('processArgs --all only matches the exact flag, not a prefix', () => {
+  assert.strictEqual(Utils.processArgs(["--all"]).All, true)
+  // "--allow" is longer than 5 chars, so the exact-length guard rejects it.
+  assert.strictEqual(Utils.processArgs(["--allow"]).All, undefined)
+})
+
+test('processArgs ignores unrecognised arguments', () => {
+  assert.deepStrictEqual(Utils.processArgs(["--nonsense", "C:\\path\\twinkle.exe"]), {})
+})
+
+test('processArgs is case-insensitive for flag names', () => {
+  assert.strictEqual(Utils.processArgs(["--UseTime"]).UseTime, true)
+  assert.strictEqual(Utils.processArgs(["--Set=80"]).Brightness, 80)
+})
+
+test('processArgs --vcp requires a code:value colon', () => {
+  // With a colon it is a valid VCP command.
+  assert.strictEqual(Utils.processArgs(["--vcp=0xD6:5"]).VCP, true)
+  // Without a colon it is malformed and must NOT be treated as a VCP command.
+  // (Regression: indexOf(":") returns -1 here, which is truthy, so the old guard
+  // wrongly accepted it.)
+  assert.strictEqual(Utils.processArgs(["--vcp=0xD6"]).VCP, undefined)
+})
