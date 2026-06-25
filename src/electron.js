@@ -19,6 +19,7 @@ const isPortable = (app.name == "twinkle-tray-portable" ? true : false)
 
 const Utils = require("./Utils")
 const AdjustmentTimes = require("./adjustmentTimes")
+const MonitorFocus = require("./monitorFocus")
 const logger = require('./logger') // init()'d in the Logging block below once logPath is known
 
 const configFilesDir = (isPortable ? path.join(__dirname, "../../config/") : app.getPath("userData"))
@@ -4839,27 +4840,14 @@ function invalidateDisplayCache() {
 const scheduledBrightness = {} // { [monitorId]: { brightness, softwareDim } }
 
 function buildElectronMonitorMap() {
-  electronToMonitorMap = {}
-  const displays = (cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays())).slice().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
-  const trayMonitors = Object.values(monitors || {})
-    .filter(m => m.bounds?.position !== undefined)
-    .sort((a, b) => a.bounds.position.x - b.bounds.position.x || a.bounds.position.y - b.bounds.position.y)
-  displays.forEach((d, i) => {
-    if (trayMonitors[i]) {
-      electronToMonitorMap[d.id] = trayMonitors[i].id
-    }
-  })
+  const displays = (cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays()))
+  electronToMonitorMap = MonitorFocus.buildMonitorMap(displays, Object.values(monitors || {}))
   logger.debug(`\x1b[36mBuilt monitor focus map: ${JSON.stringify(electronToMonitorMap)}\x1b[0m`)
 }
 
 function getActiveMonitorFromPoint(x, y) {
   const displays = cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays())
-  const activeDisplay = displays.find(d =>
-    x >= d.bounds.x && x < d.bounds.x + d.bounds.width &&
-    y >= d.bounds.y && y < d.bounds.y + d.bounds.height
-  )
-  if (!activeDisplay) return null
-  const monitorId = electronToMonitorMap[activeDisplay.id]
+  const monitorId = MonitorFocus.monitorIdAtPoint(displays, electronToMonitorMap, x, y)
   if (!monitorId) return null
   return Object.values(monitors).find(m => m.id === monitorId) || null
 }
@@ -4895,8 +4883,9 @@ function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDi
     const elapsed = Date.now() - startTime
     const now = startTime + elapsed
     const progress = Math.min(1, elapsed / durationMs)
-    const currentBrightness = Math.round(startBrightness + (targetBrightness - startBrightness) * progress)
-    const currentSoftwareDim = startSoftwareDim + (targetSoftwareDim - startSoftwareDim) * progress
+    const { brightness: currentBrightness, softwareDim: currentSoftwareDim } = MonitorFocus.computeTransitionStep({
+      startBrightness, targetBrightness, startSoftwareDim, targetSoftwareDim, progress
+    })
     let uiUpdated = false
 
     if (currentBrightness !== lastSentBrightness && now - lastDDCWrite >= DDC_THROTTLE_MS) {
@@ -4931,9 +4920,12 @@ function restoreMonitorFocusBrightness(monitor) {
   // Prefer the schedule's current intended value so we land on the right brightness
   // even if the schedule changed while this monitor was inactive-dimmed.
   // Fall back to the brightness saved just before dimming started.
-  const scheduled = settings.adjustmentTimesActive && !tempSettings.pauseTimeAdjustments && scheduledBrightness[monitor.id]
-  const targetBrightness = scheduled ? scheduled.brightness : monitorPreDimBrightness[monitor.id]
-  const targetSoftwareDim = scheduled ? scheduled.softwareDim : 0
+  const scheduleActive = settings.adjustmentTimesActive && !tempSettings.pauseTimeAdjustments
+  const { brightness: targetBrightness, softwareDim: targetSoftwareDim } = MonitorFocus.getRestoreTarget({
+    scheduleActive,
+    scheduledBrightness: scheduledBrightness[monitor.id],
+    preDimBrightness: monitorPreDimBrightness[monitor.id]
+  })
 
   stopMonitorFocusTransition()
   if (targetBrightness !== undefined) {
@@ -4978,7 +4970,7 @@ function checkMonitorFocus() {
 
   const activeMonitor = getActiveMonitorFromCursor()
   const now = Date.now()
-  const timeout = (parseInt(settings.monitorFocusSeconds) + (settings.monitorFocusMinutes * 60)) * 1000
+  const timeout = MonitorFocus.computeTimeoutMs(settings.monitorFocusSeconds, settings.monitorFocusMinutes)
 
   if (activeMonitor) {
     monitorLastVisited[activeMonitor.id] = now
@@ -4991,21 +4983,21 @@ function checkMonitorFocus() {
     if (activeMonitor && monitor.id === activeMonitor.id) continue
 
     const lastVisited = monitorLastVisited[monitor.id] || 0
-    if (now - lastVisited >= timeout) {
-      const dimLevel = settings.monitorFocusDimLevel ?? 0
-      const softwareDimTarget = settings.monitorFocusSoftwareDim ?? 0
-      const currentSoftwareDim = softwareDimLevels[monitor.id] || 0
-      // Skip if already at or below the inactive dim target — applying it would raise brightness
-      if (monitor.brightness <= dimLevel && currentSoftwareDim >= softwareDimTarget) {
-        logger.debug(`\x1b[36mSkipping inactive dim for ${monitor.id} — already at or below dim target\x1b[0m`)
-        continue
-      }
-      monitorPreDimBrightness[monitor.id] = monitor.brightness
-      monitorFocusDimmed.add(monitor.id)
-      monitor.inactiveDimmed = true
-      applyMonitorFocusTransition(monitor, dimLevel, softwareDimTarget)
-      logger.debug(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
+    if (now - lastVisited < timeout) continue
+
+    const dimLevel = settings.monitorFocusDimLevel ?? 0
+    const softwareDimTarget = settings.monitorFocusSoftwareDim ?? 0
+    const currentSoftwareDim = softwareDimLevels[monitor.id] || 0
+    if (!MonitorFocus.shouldDimMonitor({ now, lastVisited, timeout, brightness: monitor.brightness, dimLevel, currentSoftwareDim, softwareDimTarget })) {
+      // Already at or below the dim target — applying it would raise brightness.
+      logger.debug(`\x1b[36mSkipping inactive dim for ${monitor.id} — already at or below dim target\x1b[0m`)
+      continue
     }
+    monitorPreDimBrightness[monitor.id] = monitor.brightness
+    monitorFocusDimmed.add(monitor.id)
+    monitor.inactiveDimmed = true
+    applyMonitorFocusTransition(monitor, dimLevel, softwareDimTarget)
+    logger.debug(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
   }
 }
 
