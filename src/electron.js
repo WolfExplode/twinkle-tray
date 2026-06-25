@@ -84,7 +84,6 @@ const Translate = require('./Translate');
 const { EventEmitter } = require("events");
 
 const isReallyWin11 = (require("os").release()?.split(".")[2] * 1) >= 22000
-const isAtLeast1803 = (require("os").release()?.split(".")[2] * 1) >= 17134
 
 let ddcciModeTestResult = "auto"
 let lastKnownDisplays
@@ -1304,38 +1303,15 @@ async function doHotkey(hotkey) {
                   hotkeyCycleIndexes[hotkey.id] = 0
                 }
 
-                let currentCycleValue = 0
-                if (action.target === "brightness") {
-                  currentCycleValue = monitor.brightness
-                } else if (action.target === "sdr") {
-                  currentCycleValue = monitor.sdrLevel ?? 0
-                } else if (action.target === "contrast") {
-                  currentCycleValue = await getVCP(monitor, parseInt("0x12"))
-                } else if (action.target === "volume") {
-                  currentCycleValue = await getVCP(monitor, parseInt("0x62"))
-                } else if (action.target === "powerState") {
-                  currentCycleValue = await getVCP(monitor, parseInt("0xD6"))
-                } else {
-                  // Get VCP
-                  currentCycleValue = await getVCP(monitor, parseInt(action.target))
-                }
-
-                // Update cycle if it's the first "cycle" action
+                // Advance to the next value on the first "cycle" action
                 if (!hasCheckedFirstCycleAction) {
                   hasCheckedFirstCycleAction = true
-                  // If current value is same as measured, move onto next value. Else reset.
-                  if (true || currentCycleValue == parseInt(action.values[hotkeyCycleIndexes[hotkey.id]])) {
-
-                    if (hotkeyCycleIndexes[hotkey.id] >= action.values.length - 1) {
-                      // End of list, reset
-                      hotkeyCycleIndexes[hotkey.id] = 0
-                    } else {
-                      // Next value
-                      hotkeyCycleIndexes[hotkey.id]++
-                    }
-                  } else {
-                    // Reset
+                  if (hotkeyCycleIndexes[hotkey.id] >= action.values.length - 1) {
+                    // End of list, reset
                     hotkeyCycleIndexes[hotkey.id] = 0
+                  } else {
+                    // Next value
+                    hotkeyCycleIndexes[hotkey.id]++
                   }
                 }
 
@@ -1585,13 +1561,6 @@ function disableStartup(appName) {
 
 async function updateStartupOption(openAtLogin) {
   if (!isDev && !isAppX) {
-    /*
-    app.setLoginItemSettings({
-      openAtLogin,
-      path: `"${app.getPath('exe')}"`,
-    })
-    */
-
     if(openAtLogin) {
       enableStartup('electron.app.Twinkle Tray', app.getPath('exe'))
     } else {
@@ -1745,6 +1714,32 @@ function sendToAllWindows(eventName, data) {
   if (introWindow) {
     introWindow.webContents.send(eventName, data)
   }
+}
+
+//
+// Window navigation security
+//
+// Renderer windows run with nodeIntegration enabled, so any in-window
+// navigation to untrusted content would gain Node/RCE access. Only internal
+// pages (the dev server or packaged files) may navigate in-window; every other
+// URL is blocked and handed to the OS browser instead. New-window requests are
+// always denied, with external URLs likewise routed to the OS browser.
+
+function isInternalURL(url) {
+  return typeof url === "string" && (url.startsWith("http://localhost:3000") || url.startsWith("file://"))
+}
+
+function applyNavigationGuards(win) {
+  const { shell } = require('electron')
+  win.webContents.on('will-navigate', (e, url) => {
+    if (isInternalURL(url)) return;
+    e.preventDefault()
+    shell.openExternal(url)
+  })
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (!isInternalURL(url)) shell.openExternal(url)
+    return { action: 'deny' }
+  })
 }
 
 //
@@ -2725,11 +2720,6 @@ async function turnOffDisplayDDC(hwid, toggle = false) {
 
 
 
-function readInstanceName(insName) {
-  return insName.replace(/&amp;/g, '&').split("\\")
-}
-
-
 //
 //
 //    IPC Events
@@ -2970,6 +2960,8 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
       ? "http://localhost:3000/index.html"
       : `file://${path.join(__dirname, "../build/index.html")}`
   );
+
+  applyNavigationGuards(mainWindow)
 
   mainWindow.on("closed", () => { logger.debug("~~~~~ MAIN WINDOW CLOSED ~~~~~~"); mainWindow = null });
   mainWindow.on("minimize", () => { logger.debug("~~~~~ MAIN WINDOW MINIMIZED ~~~~~~") });
@@ -4104,6 +4096,8 @@ function showIntro() {
       : `file://${path.join(__dirname, "../build/intro.html")}`
   );
 
+  applyNavigationGuards(introWindow)
+
   introWindow.on("closed", () => (introWindow = null));
 
   introWindow.once('ready-to-show', () => {
@@ -4200,11 +4194,7 @@ function createSettings() {
     }, 100)
 
     // Prevent links from opening in Electron
-    settingsWindow.webContents.on('will-navigate', (e, url) => {
-      if (url.indexOf("http://localhost:3000") !== 0 || url.indexOf("file://") !== 0) return false;
-      e.preventDefault()
-      require('electron').shell.openExternal(url)
-    })
+    applyNavigationGuards(settingsWindow)
   })
 
   // Sort Time of Day Adjustments
@@ -4384,14 +4374,6 @@ function runUpdate(expectedSize = false) {
       logger.debug("Atempted to delete update file")
       throw (`Update is wrong file size! Expected: ${expectedSize}. Got: ${fileSize}`)
     }
-
-    /*
-    // For testing
-    latestVersion.show = true
-    latestVersion.error = true
-    sendToAllWindows('latest-version', latestVersion)
-    return false;
-    */
 
     const { spawn } = require('child_process');
     let process = spawn(updatePath, {
@@ -5057,15 +5039,6 @@ function getSunCalcTime(timeName = "solarNoon") {
   const localTimes = SunCalc.getTimes(new Date(), settings.adjustmentTimeLatitude, settings.adjustmentTimeLongitude)
   const time = new Date(localTimes[timeName])
   return `${time.getHours()}:${time.getMinutes().toString().padStart(2, '0')}`
-}
-
-function getSunCalcTimes() {
-  const localTimes = SunCalc.getTimes(new Date(), settings.adjustmentTimeLatitude, settings.adjustmentTimeLongitude)
-  for(const timeName in localTimes) {
-    const time = new Date(localTimes[timeName])
-    localTimes[timeName] = `${time.getHours()}:${time.getMinutes()}`
-  }
-  return localTimes
 }
 
 // If applicable, apply the current Time of Day Adjustment
