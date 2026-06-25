@@ -2109,7 +2109,7 @@ const setIsRefreshing = newValue => {
 }
 
 
-refreshMonitorsJob = async (fullRefresh = false) => {
+const refreshMonitorsJob = async (fullRefresh = false) => {
   return await new Promise((resolve, reject) => {
     try {
       monitorsThread.send({
@@ -2510,26 +2510,6 @@ function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, 
   if(max < 100) points.push({ input: 100, output: max })
 
   return Utils.getCalibratedValue(brightness, points, normalize)
-  
-  let level = brightness
-  if (level > 100) level = 100;
-  if (level < 0) level = 0;
-  if (min > 0 || max < 100) {
-    let out = level
-    if (!normalize) {
-      // Normalize
-      out = (min + ((level / 100) * (max - min)))
-    } else {
-      // Unnormalize
-      out = ((level - min) * (100 / (max - min)))
-    }
-    if (out > 100) out = 100;
-    if (out < 0) out = 0;
-
-    return Math.round(out)
-  } else {
-    return level
-  }
 }
 
 let currentTransition = null
@@ -4242,7 +4222,7 @@ ipcMain.on("windowClose", e => {
 
 let latestVersion = false
 let lastCheck = false
-checkForUpdates = async (force = false) => {
+const checkForUpdates = async (force = false) => {
   if (!force) {
     if (!settings.checkForUpdates) return false;
     if (lastCheck && lastCheck == new Date().getDate()) return false;
@@ -4293,7 +4273,7 @@ checkForUpdates = async (force = false) => {
 }
 
 
-getLatestUpdate = async (version) => {
+const getLatestUpdate = async (version) => {
   try {
     logger.debug("Downloading update from: " + version.downloadURL)
     const fs = require('fs');
