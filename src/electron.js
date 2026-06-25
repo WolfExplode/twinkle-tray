@@ -20,6 +20,7 @@ const isPortable = (app.name == "twinkle-tray-portable" ? true : false)
 const Utils = require("./Utils")
 const AdjustmentTimes = require("./adjustmentTimes")
 const MonitorFocus = require("./monitorFocus")
+const MonitorTransforms = require("./monitorTransforms")
 const logger = require('./logger') // init()'d in the Logging block below once logPath is known
 
 const configFilesDir = (isPortable ? path.join(__dirname, "../../config/") : app.getPath("userData"))
@@ -1495,37 +1496,11 @@ function hotkeyOverlayHide(force = true) {
 }
 
 function applyOrder(monitorList = monitors) {
-  for (let key in monitorList) {
-    const monitor = monitorList[key]
-    for (let order of settings.order) {
-      if (monitor.id == order.id) {
-        monitor.order = order.order
-      }
-    }
-  }
+  return MonitorTransforms.applyOrder(monitorList, settings.order)
 }
 
 function applyRemaps(monitorList = monitors) {
-  for (let key in monitorList) {
-    const monitor = monitorList[key]
-    applyRemap(monitor)
-  }
-}
-
-function applyRemap(monitor) {
-  if (settings.remaps) {
-    for (let remapName in settings.remaps) {
-      if (remapName == monitor.name || remapName == monitor.id) {
-        let remap = settings.remaps[remapName]
-        monitor.min = remap.min
-        monitor.max = remap.max
-        monitor.calibration = remap.calibration
-        // Stop if using new scheme
-        if (remapName == monitor.id) return monitor;
-      }
-    }
-  }
-  return monitor
+  return MonitorTransforms.applyRemaps(monitorList, settings.remaps)
 }
 
 function minMax(value, min = 0, max = 100) {
