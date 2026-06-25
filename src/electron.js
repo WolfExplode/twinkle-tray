@@ -23,6 +23,7 @@ const MonitorFocus = require("./monitorFocus")
 const MonitorTransforms = require("./monitorTransforms")
 const Profiles = require("./profiles")
 const UpdateCheck = require("./updateCheck")
+const { store } = require("./state/store") // single owner of application state; slices migrate here one at a time
 const logger = require('./logger') // init()'d in the Logging block below once logPath is known
 
 const configFilesDir = (isPortable ? path.join(__dirname, "../../config/") : app.getPath("userData"))
@@ -581,12 +582,18 @@ const tempSettings = {
   pauseIdleDetection: false
 }
 
-let settings = Object.assign({}, defaultSettings)
+// The store owns the settings value. `settings` is a stable alias to the slice
+// object (the store never replaces the reference — update() merges in place), so
+// the ~150 existing `settings.foo` reads keep working unchanged. The whole-object
+// mutation paths (readSettings load, writeSettings, reset) route through
+// store.update so the store stays the single source of truth.
+store.update("settings", Object.assign({}, defaultSettings))
+const settings = store.get("settings")
 
 function readSettings(doProcessSettings = true) {
   try {
     if (fs.existsSync(settingsPath)) {
-      settings = Object.assign(settings, JSON.parse(fs.readFileSync(settingsPath)))
+      store.update("settings", JSON.parse(fs.readFileSync(settingsPath)))
     } else {
       fs.writeFileSync(settingsPath, JSON.stringify({}))
     }
@@ -777,7 +784,7 @@ if (settings.forceLowPowerGPU) {
 
 let writeSettingsTimeout = false
 function writeSettings(newSettings = {}, processAfter = true, sendUpdate = true) {
-  settings = Object.assign(settings, newSettings)
+  store.update("settings", newSettings)
 
   if (!writeSettingsTimeout) {
     writeSettingsTimeout = setTimeout(() => {
@@ -1933,7 +1940,10 @@ ipcMain.on('request-settings', (event) => {
 })
 
 ipcMain.on('reset-settings', () => {
-  settings = Object.assign({}, defaultSettings)
+  // Full reset: clear the slice in place (update() only merges, can't remove
+  // stale keys), then reseed defaults through the store.
+  for (const key of Object.keys(settings)) delete settings[key]
+  store.update("settings", Object.assign({}, defaultSettings))
   logger.debug("Resetting settings")
   lastKnownDisplays = {}
   fs.writeFileSync(knownDisplaysPath, JSON.stringify(lastKnownDisplays))
