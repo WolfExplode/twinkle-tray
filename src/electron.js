@@ -834,7 +834,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     }
 
     if (newSettings.adjustmentTimes !== undefined) {
-      lastTimeEvent = false
+      store.update("schedule", { lastTimeEvent: false })
       restartBackgroundUpdate()
       rebuildTray = true
       sendScheduleLockState()
@@ -847,7 +847,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     if (newSettings.adjustmentTimesActive !== undefined) {
       tempSettings.pauseTimeAdjustments = !settings.adjustmentTimesActive
       if (settings.adjustmentTimesActive) {
-        lastTimeEvent = false
+        store.update("schedule", { lastTimeEvent: false })
         applyCurrentAdjustmentEvent(true, true)
         // Overwrite saved manual brightness with the schedule values so toggling
         // the schedule back off leaves brightness unchanged.
@@ -3625,7 +3625,7 @@ app.on("ready", async () => {
 
     if (settings.brightnessAtStartup) setKnownBrightness();
     if (settings.checkTimeAtStartup) {
-      lastTimeEvent = false;
+      store.update("schedule", { lastTimeEvent: false });
       setTimeout(() => handleBackgroundUpdate(true), 3500)
     }
     restartBackgroundUpdate()
@@ -4751,7 +4751,11 @@ function invalidateDisplayCache() {
 // scheduledBrightness tracks what the schedule intends for each monitor,
 // including monitors that are currently inactive-dimmed, so restoration
 // always reflects the current schedule rather than a stale saved value.
-const scheduledBrightness = {} // { [monitorId]: { brightness, softwareDim } }
+// schedule slice (store-owned). scheduledBrightness is a stable map reference
+// mutated in place; lastTimeEvent (seeded further below) is a reassigned value
+// read and written through the store.
+store.update("schedule", { scheduledBrightness: {} })
+const scheduledBrightness = store.get("schedule").scheduledBrightness // { [monitorId]: { brightness, softwareDim } }
 
 function buildElectronMonitorMap() {
   const displays = (cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays()))
@@ -4981,10 +4985,15 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 
     const date = new Date()
 
+    // Local snapshot of the store-owned schedule state; writes go back through
+    // the store so it stays the source of truth.
+    let lastTimeEvent = store.get("schedule").lastTimeEvent
+
     // Reset on new day
     if (force || settings.adjustmentTimeAnimate || (lastTimeEvent && lastTimeEvent.day != date.getDate())) {
       logger.debug("New day (or forced)... resetting lastTimeEvent")
       lastTimeEvent = false
+      store.update("schedule", { lastTimeEvent: false })
     }
 
     // Find most recent event
@@ -5007,6 +5016,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
         logger.debug("Adjusting brightness automatically", foundEvent)
         lastTimeEvent = Object.assign({}, foundEvent)
         lastTimeEvent.day = new Date().getDate()
+        store.update("schedule", { lastTimeEvent })
 
         const applyFoundEvent = () => {
           const eventSoftwareDim = foundEvent.softwareDim ?? 0
@@ -5062,11 +5072,13 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 }
 
 
-let lastTimeEvent = {
-  hour: new Date().getHours(),
-  minute: new Date().getMinutes(),
-  day: new Date().getDate()
-}
+store.update("schedule", {
+  lastTimeEvent: {
+    hour: new Date().getHours(),
+    minute: new Date().getMinutes(),
+    day: new Date().getDate()
+  }
+})
 function handleBackgroundUpdate(force = false) {
   logger.debug("Event: handleBackgroundUpdate");
 
