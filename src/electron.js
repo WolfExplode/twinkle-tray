@@ -21,6 +21,7 @@ const Utils = require("./Utils")
 const AdjustmentTimes = require("./adjustmentTimes")
 const MonitorFocus = require("./monitorFocus")
 const MonitorTransforms = require("./monitorTransforms")
+const Profiles = require("./profiles")
 const logger = require('./logger') // init()'d in the Logging block below once logPath is known
 
 const configFilesDir = (isPortable ? path.join(__dirname, "../../config/") : app.getPath("userData"))
@@ -3328,18 +3329,7 @@ function stopFocusTracking() {
 
 function windowMatchesProfile(window) {
   if (!window) return false;
-  let foundProfile
-  if (settings.profiles?.length && window.path?.length) {
-    for (const profile of settings.profiles) {
-      if(profile.path?.length) {
-        for (const path of profile.path.split(',')) {
-          if (window.path.toLowerCase().indexOf(path.trim().toLowerCase()) > -1) {
-            foundProfile = profile
-          }
-        }
-      }
-    }
-  }
+  const foundProfile = Profiles.matchWindowToProfile(window.path, settings.profiles)
   if(foundProfile) logger.debug(`Matched window to profile ${foundProfile.name}`);
   return foundProfile
 }
