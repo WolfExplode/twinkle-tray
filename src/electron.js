@@ -857,8 +857,8 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         // Schedule turned off: brightness stays at schedule values (already saved above)
         for (const key in monitors) {
           const id = monitors[key].id
-          const kelvin = manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
-          const highlightWeight = manualHighlightActive ? (manualHighlightLevels[id] ?? 0) : 0
+          const kelvin = store.get("color").manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
+          const highlightWeight = store.get("color").manualHighlightActive ? (manualHighlightLevels[id] ?? 0) : 0
           updateDisplayColor(id, { kelvin, highlightWeight })
         }
       }
@@ -873,7 +873,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         // Scheduling disabled: restore manual values or reset to neutral
         for (const key in monitors) {
           const id = monitors[key].id
-          const kelvin = manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
+          const kelvin = store.get("color").manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
           updateDisplayColor(id, { kelvin })
         }
       }
@@ -889,7 +889,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         // Scheduling disabled: restore manual values or reset to neutral
         for (const key in monitors) {
           const id = monitors[key].id
-          const weight = manualHighlightActive ? (manualHighlightLevels[id] ?? 0) : 0
+          const weight = store.get("color").manualHighlightActive ? (manualHighlightLevels[id] ?? 0) : 0
           updateDisplayColor(id, { highlightWeight: weight })
         }
       }
@@ -1816,10 +1816,17 @@ function showSoftwareDimOverlays() {
 
 const warmthLevels = {}
 const highlightLevels = {}
-const manualWarmthLevels = {}
-const manualHighlightLevels = {}
-let manualTemperatureActive = false
-let manualHighlightActive = false
+// color slice (store-owned): the user's manual temperature/highlight state.
+// The level maps are stable references aliased from the slice (mutated in place);
+// the active flags are reassigned values read/written through the store.
+store.update("color", {
+  manualWarmthLevels: {},
+  manualHighlightLevels: {},
+  manualTemperatureActive: false,
+  manualHighlightActive: false
+})
+const manualWarmthLevels = store.get("color").manualWarmthLevels
+const manualHighlightLevels = store.get("color").manualHighlightLevels
 
 function getMonitorDisplayIndex(monitorId) {
   const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
@@ -1866,14 +1873,14 @@ function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
 function updateWarmth(monitorId, kelvin = 6500) {
   kelvin = Math.max(3000, Math.min(6500, kelvin))
   manualWarmthLevels[monitorId] = kelvin
-  if (manualTemperatureActive) {
+  if (store.get("color").manualTemperatureActive) {
     updateDisplayColor(monitorId, { kelvin })
   }
 }
 
 function updateHighlightCompression(monitorId, weight = 0) {
   manualHighlightLevels[monitorId] = weight
-  if (manualHighlightActive) {
+  if (store.get("color").manualHighlightActive) {
     updateDisplayColor(monitorId, { highlightWeight: weight })
   }
 }
@@ -1925,8 +1932,9 @@ function applyCurrentDisplayColorEffects(overrideManual = true) {
     const monitor = monitors[key]
     const updates = getScheduledColorForMonitor(monitor, foundEvent)
     if (!overrideManual) {
-      if (manualTemperatureActive) delete updates.kelvin
-      if (manualHighlightActive) delete updates.highlightWeight
+      const color = store.get("color")
+      if (color.manualTemperatureActive) delete updates.kelvin
+      if (color.manualHighlightActive) delete updates.highlightWeight
     }
     if (Object.keys(updates).length) {
       updateDisplayColor(monitor.id, updates)
@@ -3801,7 +3809,7 @@ function getTemperatureMenuItem() {
   return {
     label: T.t("PANEL_LABEL_COLOR_TEMPERATURE"),
     type: 'checkbox',
-    checked: manualTemperatureActive,
+    checked: store.get("color").manualTemperatureActive,
     click: () => {
       toggleColorTemperature()
     }
@@ -3812,7 +3820,7 @@ function getHighlightCompressionMenuItem() {
   return {
     label: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION"),
     type: 'checkbox',
-    checked: manualHighlightActive,
+    checked: store.get("color").manualHighlightActive,
     click: () => {
       toggleHighlightCompression()
     }
@@ -3821,7 +3829,7 @@ function getHighlightCompressionMenuItem() {
 
 function getCurrentKelvin() {
   try {
-    if (!manualTemperatureActive && !settings.adjustmentTimeTemperatureEnabled) return 6500
+    if (!store.get("color").manualTemperatureActive && !settings.adjustmentTimeTemperatureEnabled) return 6500
     const activeLevels = Object.values(warmthLevels).filter(k => k > 0 && k < 6500)
     if (activeLevels.length) {
       return Math.round(activeLevels.reduce((a, b) => a + b, 0) / activeLevels.length)
@@ -3833,7 +3841,8 @@ function getCurrentKelvin() {
 }
 
 function sendColorToggleState() {
-  sendToAllWindows('color-toggle-state', { manualTemperatureActive, manualHighlightActive })
+  const color = store.get("color")
+  sendToAllWindows('color-toggle-state', { manualTemperatureActive: color.manualTemperatureActive, manualHighlightActive: color.manualHighlightActive })
 }
 
 function sendScheduleLockState() {
@@ -3863,7 +3872,8 @@ function toggleColorEffect(type, openPanel = false) {
     ? (id, v) => updateDisplayColor(id, { kelvin: v })
     : (id, v) => updateDisplayColor(id, { highlightWeight: v })
 
-  const wasActive = isTemp ? manualTemperatureActive : manualHighlightActive
+  const activeKey = isTemp ? 'manualTemperatureActive' : 'manualHighlightActive'
+  const wasActive = store.get("color")[activeKey]
   if (wasActive) {
     // Preserve current effective value before turning off
     for (const key in monitors) {
@@ -3873,9 +3883,8 @@ function toggleColorEffect(type, openPanel = false) {
     }
   }
 
-  if (isTemp) manualTemperatureActive = !manualTemperatureActive
-  else manualHighlightActive = !manualHighlightActive
-  const nowActive = isTemp ? manualTemperatureActive : manualHighlightActive
+  const nowActive = !wasActive
+  store.update("color", { [activeKey]: nowActive })
 
   if (nowActive) {
     for (const key in monitors) {
@@ -3920,7 +3929,7 @@ function setTrayStatus() {
       }
       let tooltip = 'Twinkle Tray' + (isDev ? " (Dev)" : "")
       const kelvin = getCurrentKelvin()
-      const showKelvin = (manualTemperatureActive || settings.adjustmentTimeTemperatureEnabled) && kelvin < 6500
+      const showKelvin = (store.get("color").manualTemperatureActive || settings.adjustmentTimeTemperatureEnabled) && kelvin < 6500
       if (i > 0) {
         averagePerc = Math.floor(averagePerc / i)
         tooltip += ' (' + averagePerc + '%' + (showKelvin ? ', ' + kelvin + 'K' : '') + ')'
@@ -5099,7 +5108,7 @@ function handleBackgroundUpdate(force = false) {
     }
 
     // Re-apply display color transforms (gamma ramps can be overwritten by the OS)
-    if (!isWindowsUserIdle && (manualTemperatureActive || manualHighlightActive || settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
+    if (!isWindowsUserIdle && (store.get("color").manualTemperatureActive || store.get("color").manualHighlightActive || settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
       showDisplayColorEffects()
     }
   } catch (e) {
