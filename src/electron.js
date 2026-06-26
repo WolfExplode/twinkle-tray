@@ -25,6 +25,7 @@ const { createAnalytics } = require("./analytics")
 const { createPanelAnimator } = require("./panelAnimator")
 const { createSoftwareDim } = require("./softwareDim")
 const { createDisplayColor } = require("./displayColor")
+const { createSchedule } = require("./schedule")
 const MonitorTransforms = require("./monitorTransforms")
 const Profiles = require("./profiles")
 const UpdateCheck = require("./updateCheck")
@@ -1438,26 +1439,28 @@ function applyNavigationGuards(win) {
 const softwareDim = createSoftwareDim({ BrowserWindow, screen, store, monitors, MonitorTransforms })
 const { softwareDimLevels, updateSoftwareDim, hideSoftwareDimOverlays, showSoftwareDimOverlays } = softwareDim
 
+// Schedule resolver: binds the pure ./adjustmentTimes.js rules to the live
+// `settings` + SunCalc. One shared instance is the single source of truth for
+// "what does the Time-of-Day schedule want right now"; the hoisted wrapper
+// functions below delegate to it, and it is injected into displayColor so that
+// module no longer reaches back into electron.js for schedule queries.
+const schedule = createSchedule({ AdjustmentTimes, settings, SunCalc })
+
 // Display colour effects (gamma warmth + highlight compression) live in
 // ./displayColor.js. It seeds the level maps into the "color" slice and hands
 // back stable aliases so the tray-menu builders and settings handlers below keep
-// reading the same references. setTrayStatus and getCurrentAdjustmentEvent are
-// hoisted declarations, so they can be injected by reference here.
+// reading the same references. Tray refreshes are announced through the store
+// (store.touch) rather than via injected tray callbacks, so the dependency only
+// flows downward into the module — see the store.onTouch wiring near createTray.
 const displayColor = createDisplayColor({
   ColorGamma,
   store,
   screen,
   monitors,
   MonitorTransforms,
-  AdjustmentTimes,
+  schedule,
   settings,
-  sendToAllWindows,
-  setTrayStatus,
-  setTrayMenu,
-  // toggleTray is a `const` defined later in the file, so it's in the temporal
-  // dead zone right now — inject a lazy wrapper rather than a direct reference.
-  toggleTray: (...args) => toggleTray(...args),
-  getCurrentAdjustmentEvent
+  sendToAllWindows
 })
 const {
   manualWarmthLevels,
@@ -3083,6 +3086,15 @@ app.on('quit', () => {
 //
 //
 
+// Cross-subsystem tray signals routed through the store, so extracted modules
+// (e.g. displayColor) announce "refresh the tray" / "open the panel" without
+// holding a back-edge callback into this file. These are signal-only slices —
+// they carry no state, just an event channel. setTrayStatus/setTrayMenu are
+// hoisted; toggleTray is referenced lazily inside the handler (runtime-safe).
+store.onTouch("trayStatus", () => setTrayStatus())
+store.onTouch("trayMenu", () => setTrayMenu())
+store.onTouch("requestPanelOpen", () => setTimeout(() => toggleTray(true), 100))
+
 function createTray() {
   if (tray != null) return false;
 
@@ -4101,21 +4113,6 @@ const monitorFocus = createMonitorFocusController({
 })
 
 
-// Get the currently applicable Time of Day Adjustment.
-// Pure logic lives in ./adjustmentTimes.js; this wrapper supplies the live settings,
-// the current minute-of-day, and the sun-relative time resolver.
-function getCurrentAdjustmentEvent() {
-  return AdjustmentTimes.getCurrentAdjustmentEvent(settings.adjustmentTimes, AdjustmentTimes.toNowValue(), getSunCalcTime)
-}
-
-function getCurrentAdjustmentEventLERP() {
-  return AdjustmentTimes.getCurrentAdjustmentEventLERP(settings.adjustmentTimes, AdjustmentTimes.toNowValue(), settings.adjustmentTimeIndividualDisplays, getSunCalcTime)
-}
-
-function getSunCalcTime(timeName = "solarNoon") {
-  return AdjustmentTimes.getSunCalcTime(SunCalc, settings.adjustmentTimeLatitude, settings.adjustmentTimeLongitude, timeName)
-}
-
 // If applicable, apply the current Time of Day Adjustment
 function applyCurrentAdjustmentEvent(force = false, instant = true) {
   try {
@@ -4136,7 +4133,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
     }
 
     // Find most recent event
-    const foundEvent = getCurrentAdjustmentEvent()
+    const foundEvent = schedule.getCurrentAdjustmentEvent()
     if (foundEvent) {
       // Use !== (not <) so transitions that decrease in value (e.g. crossing
       // midnight from a 22:00 event to a 07:00 event) still apply.
@@ -4144,7 +4141,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 
         if (settings.adjustmentTimeAnimate) {
           // If LERPing, override foundEvent with interpolated value
-          const lerp = getCurrentAdjustmentEventLERP()
+          const lerp = schedule.getCurrentAdjustmentEventLERP()
           if (typeof lerp === "number") {
             foundEvent.brightness = lerp
           } else if (typeof lerp === "object") {

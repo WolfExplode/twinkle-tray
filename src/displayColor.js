@@ -7,10 +7,10 @@
 // this module seeds them and returns stable aliases so the tray-menu builders and
 // settings handlers in electron.js keep reading the same references.
 //
-// Two of the deps are back-edges into subsystems that still live in electron.js:
-// setTrayStatus (tray) and getCurrentAdjustmentEvent (schedule). Both are passed
-// as live function references — they are hoisted declarations, defined by the
-// time createDisplayColor runs.
+// All dependencies flow downward — this module holds no back-edge callbacks into
+// electron.js. Schedule queries go through the injected `schedule` instance, and
+// cross-subsystem signals (refresh the tray, open the panel) are announced on the
+// store via store.touch; electron.js subscribes with store.onTouch.
 
 function createDisplayColor(deps) {
   const {
@@ -19,13 +19,9 @@ function createDisplayColor(deps) {
     screen,
     monitors,
     MonitorTransforms,
-    AdjustmentTimes,
+    schedule,
     settings,
-    sendToAllWindows,
-    setTrayStatus,
-    setTrayMenu,
-    toggleTray,
-    getCurrentAdjustmentEvent
+    sendToAllWindows
   } = deps
 
   // color slice (store-owned). The level maps (effective warmth/highlight applied
@@ -77,7 +73,7 @@ function createDisplayColor(deps) {
     }
 
     sendDisplayColorLevels()
-    setTrayStatus()
+    store.touch("trayStatus")
   }
 
   function updateWarmth(monitorId, kelvin = 6500) {
@@ -112,11 +108,11 @@ function createDisplayColor(deps) {
   }
 
   function getScheduledColorForMonitor(monitor, foundEvent) {
-    return AdjustmentTimes.getScheduledColorForMonitor(monitor, foundEvent, settings)
+    return schedule.getScheduledColorForMonitor(monitor, foundEvent)
   }
 
   function applyCurrentDisplayColorEffects(overrideManual = true) {
-    const foundEvent = getCurrentAdjustmentEvent()
+    const foundEvent = schedule.getCurrentAdjustmentEvent()
     if (!foundEvent) return
 
     for (let key in monitors) {
@@ -141,7 +137,7 @@ function createDisplayColor(deps) {
       if (activeLevels.length) {
         return Math.round(activeLevels.reduce((a, b) => a + b, 0) / activeLevels.length)
       }
-      const event = getCurrentAdjustmentEvent()
+      const event = schedule.getCurrentAdjustmentEvent()
       if (event?.kelvin != null) return event.kelvin
     } catch (e) { }
     return 6500
@@ -190,18 +186,18 @@ function createDisplayColor(deps) {
         applyManual(id, manualLevels[id] ?? effectiveLevels[id] ?? defaultValue)
       }
     } else {
-      const foundEvent = settings[scheduleKey] ? getCurrentAdjustmentEvent() : null
+      const foundEvent = settings[scheduleKey] ? schedule.getCurrentAdjustmentEvent() : null
       for (const key in monitors) {
         const monitor = monitors[key]
         const updates = foundEvent ? getScheduledColorForMonitor(monitor, foundEvent) : {}
         applyDisplay(monitor.id, updates[scheduledProp] ?? defaultValue)
       }
     }
-    setTrayMenu()
-    setTrayStatus()
+    store.touch("trayMenu")
+    store.touch("trayStatus")
     sendColorToggleState()
     if (openPanel && nowActive) {
-      setTimeout(() => toggleTray(true), 100)
+      store.touch("requestPanelOpen")
     }
   }
 
