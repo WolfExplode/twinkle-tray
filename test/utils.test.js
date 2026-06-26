@@ -10,6 +10,46 @@ test('parseTime converts HH:MM to minutes since midnight', () => {
   assert.strictEqual(Utils.parseTime("12:00"), 720)
 })
 
+test('minMax clamps to the given range, default 0-100', () => {
+  assert.strictEqual(Utils.minMax(50), 50)
+  assert.strictEqual(Utils.minMax(-5), 0)
+  assert.strictEqual(Utils.minMax(150), 100)
+  assert.strictEqual(Utils.minMax(5, 10, 20), 10)
+  assert.strictEqual(Utils.minMax(25, 10, 20), 20)
+})
+
+test('easeOutQuad maps endpoints 0->0 and 1->1', () => {
+  assert.strictEqual(Utils.easeOutQuad(0), 0)
+  assert.strictEqual(Utils.easeOutQuad(1), 1)
+  // eased value is ahead of linear in the first half
+  assert.ok(Utils.easeOutQuad(0.5) > 0.5)
+})
+
+test('determineTheme honors an explicit dark/light, else falls back to system', () => {
+  assert.strictEqual(Utils.determineTheme("dark"), "dark")
+  assert.strictEqual(Utils.determineTheme("LIGHT"), "light")
+  assert.strictEqual(Utils.determineTheme("default", { SystemUsesLightTheme: true }), "light")
+  assert.strictEqual(Utils.determineTheme("default", { SystemUsesLightTheme: false }), "dark")
+  assert.strictEqual(Utils.determineTheme("default", null), "dark")
+})
+
+test('normalizeBrightness passes through when no caps or calibration', () => {
+  assert.strictEqual(Utils.normalizeBrightness(50, false, 0, 100, []), 50)
+})
+
+test('normalizeBrightness maps to the min/max cap range when sending', () => {
+  // sending to Monitors.js (normalize=false): input 0..100 -> output min..max
+  assert.strictEqual(Utils.normalizeBrightness(0, false, 20, 80), 20)
+  assert.strictEqual(Utils.normalizeBrightness(100, false, 20, 80), 80)
+  assert.strictEqual(Utils.normalizeBrightness(50, false, 20, 80), 50)
+})
+
+test('vcpStr formats a code as an uppercase 0x hex string', () => {
+  assert.strictEqual(Utils.vcpStr(18), "0x12")
+  assert.strictEqual(Utils.vcpStr(0x62), "0x62")
+  assert.strictEqual(Utils.vcpStr("16"), "0x10")
+})
+
 test('lerp interpolates between two values', () => {
   assert.strictEqual(Utils.lerp(0, 100, 0), 0)
   assert.strictEqual(Utils.lerp(0, 100, 1), 100)

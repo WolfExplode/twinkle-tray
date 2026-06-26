@@ -23,6 +23,7 @@ const MonitorFocus = require("./monitorFocus")
 const MonitorTransforms = require("./monitorTransforms")
 const Profiles = require("./profiles")
 const UpdateCheck = require("./updateCheck")
+const { createHotkeyController } = require("./hotkeys")
 const { store } = require("./state/store") // single owner of application state; slices migrate here one at a time
 const logger = require('./logger') // init()'d in the Logging block below once logPath is known
 
@@ -124,12 +125,6 @@ const windowMenu = Menu.buildFromTemplate([{
   accelerator: "Ctrl+Shift+I"
 }])
 
-function vcpStr(code) {
-  return `0x${parseInt(code).toString(16).toUpperCase()}`
-}
-
-
-
 // Monitors thread
 // Handles WMI + DDC/CI activity
 
@@ -138,11 +133,16 @@ let monitorsThread = {
     try {
       if (!(monitorsThreadReal?.connected && monitorsThreadReal?.exitCode === null)) {
         startMonitorThread()
-        while(!monitorsThreadReady) {
+        // Wait for "ready", but bail if the start aborted (idle/early-return left
+        // us "idle") or the thread "failed" — otherwise this loops forever.
+        const waitStart = Date.now()
+        while(monitorsThreadStatus !== "ready") {
+          if(monitorsThreadStatus === "idle" || monitorsThreadStatus === "failed") throw("Monitor thread didn't start.");
+          if(Date.now() - waitStart > MONITORS_THREAD_READY_TIMEOUT) throw("Timed out waiting for monitor thread.");
           await Utils.wait(50)
         }
       }
-      if(!monitorsThreadReady) throw("Thread not ready!");
+      if(monitorsThreadStatus !== "ready") throw("Thread not ready!");
       if(!(monitorsThreadReal?.connected && monitorsThreadReal?.exitCode === null)) throw("Thread not available!");
       if((data.type == "vcp" || data.type == "brightness" || data.type == "getVCP") && store.get("monitors").isRefreshing) while(store.get("monitors").isRefreshing) {
         await Utils.wait(50)
@@ -165,14 +165,14 @@ let monitorsThread = {
 }
 let monitorsThreadReal
 let monitorsEventEmitter = new EventEmitter()
-let monitorsThreadReady = false
-let monitorsThreadStarting = false
-let monitorsThreadFailed = false
+// Monitor worker lifecycle as one state, not four booleans. Legal states:
+// "idle" (no thread) | "starting" (forked, awaiting ready) | "ready" | "failed".
+// `monitorsThreadReal` is the fork handle, orthogonal to this.
+let monitorsThreadStatus = "idle"
+const MONITORS_THREAD_READY_TIMEOUT = 10000
 function startMonitorThread() {
-  if((monitorsThreadReal?.connected && monitorsThreadReal?.exitCode === null) || monitorsThreadStarting || store.get("idle").isWindowsUserIdle) return false;
-  monitorsThreadReady = false
-  monitorsThreadStarting = true
-  monitorsThreadFailed = false
+  if((monitorsThreadReal?.connected && monitorsThreadReal?.exitCode === null) || monitorsThreadStatus === "starting" || store.get("idle").isWindowsUserIdle) return false;
+  monitorsThreadStatus = "starting"
   logger.debug("Starting monitor thread")
   const skipTest = (settings.preferredDDCCIMethod == "auto" ? false : true)
   monitorsThreadReal = fork(path.join(__dirname, 'Monitors.js'), ["--isdev=" + isDev, "--apppath=" + app.getAppPath(), "--skiptest=" + skipTest], { silent: false })
@@ -184,8 +184,7 @@ function startMonitorThread() {
         return
       }
       if (data.type === "ready") {
-        monitorsThreadReady = true
-        monitorsThreadStarting = false
+        monitorsThreadStatus = "ready"
         store.update("monitors", { isRefreshing: false })
         monitorsThreadReal.send({
           type: "settings",
@@ -202,7 +201,7 @@ function startMonitorThread() {
         getLocalization()
       }
       if (data.type === "ddcciModeTestResult") {
-        settings.lastDetectedDDCCIMethod = (data.value ? "fast" : "accurate")
+        store.update("settings", { lastDetectedDDCCIMethod: (data.value ? "fast" : "accurate") })
       }
       monitorsEventEmitter.emit(data.type, data)
     }
@@ -210,9 +209,9 @@ function startMonitorThread() {
   monitorsThreadReal.on("error", err => {
     logger.error(err)
 
-    if(monitorsThreadFailed) return false;
+    if(monitorsThreadStatus === "failed") return false;
     if(err.code === 'EPIPE') return false;
-    monitorsThreadFailed = true
+    monitorsThreadStatus = "failed"
 
     const options = {
     title: 'Monitors thread failed',
@@ -224,7 +223,7 @@ function startMonitorThread() {
 
     stopMonitorThread()
     setTimeout(() => {
-      if(!monitorsThreadReal?.connected && !monitorsThreadStarting) {
+      if(!monitorsThreadReal?.connected && monitorsThreadStatus !== "starting") {
         startMonitorThread()
       }
     }, 1000)
@@ -233,8 +232,9 @@ function startMonitorThread() {
 
 function stopMonitorThread() {
   logger.debug("Killing monitor thread")
-  monitorsThreadReady = false
-  monitorsThreadStarting = false
+  // Don't clobber "failed" — the error handler relies on it persisting to
+  // dedupe repeated error events until startMonitorThread() resets to "starting".
+  if(monitorsThreadStatus !== "failed") monitorsThreadStatus = "idle"
   setIsRefreshing(false)
   if(monitorsThreadReal?.connected) {
     monitorsThreadReal.kill()
@@ -254,7 +254,7 @@ function getVCP(monitor, code) {
       // Write VCP values to monitor object
       if(data?.value?.[0] != undefined) {
         try {
-          monitors[hwid?.split("#")[2]].features[vcpStr(vcpParsed)] = data.value?.[0]
+          monitors[hwid?.split("#")[2]].features[Utils.vcpStr(vcpParsed)] = data.value?.[0]
         } catch(e) {
           logger.debug(e)
         }
@@ -824,7 +824,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     settings.settingsBuild = appBuild
 
     if (settings.theme) {
-      nativeTheme.themeSource = determineTheme(settings.theme)
+      nativeTheme.themeSource = Utils.determineTheme(settings.theme, store.get("theme").lastTheme)
       broadcastThemeSettings()
     }
 
@@ -1029,7 +1029,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.branch) {
       store.update("updates", { lastCheck: false })
-      settings.dismissedUpdate = false
+      store.update("settings", { dismissedUpdate: false })
       checkForUpdates()
     }
 
@@ -1058,7 +1058,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     logger.debug("Couldn't process settings!", e)
   }
 
-  if(monitorsThreadReady) {
+  if(monitorsThreadStatus === "ready") {
     monitorsThread.send({
       type: "settings",
       settings: settings
@@ -1212,183 +1212,31 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
 }
 
 
-function applyHotkeys(monitorList = monitors) {
-  try {
-    if (settings.hotkeys !== undefined && settings.hotkeys?.length) {
-      globalShortcut.unregisterAll()
-      for (const hotkey of settings.hotkeys) {
-        try {
-          // Only apply if found/valid
-          if (hotkey.accelerator) {
-            hotkey.active = globalShortcut.register(hotkey.accelerator, () => {
-              doHotkey(hotkey)
-            })
-          }
-        } catch (e) {
-          // Couldn't register hotkey
-        }
-  
-      }
-    }
-  } catch(e) {
-    logger.debug("Couldn't apply hotkeys:", e)
-  }
-  sendToAllWindows('settings-updated', settings)
-}
+// Hotkey subsystem lives in hotkeys.js. Its dependencies are injected here so
+// the contract is explicit; as state migrates into the store, several of these
+// (monitors, settings) collapse into `store`.
+const hotkeyController = createHotkeyController({
+  monitors,
+  settings,
+  store,
+  logger,
+  globalShortcut,
+  getLastRefreshMonitors: () => lastRefreshMonitors,
+  refreshMonitors,
+  getVCP,
+  minMax: Utils.minMax,
+  touchMonitors,
+  updateBrightnessThrottle,
+  pauseMonitorUpdates,
+  writeSettings,
+  sleepDisplays,
+  setRecentlyInteracted,
+  hotkeyOverlayStart,
+  sendToAllWindows
+})
+const applyHotkeys = (monitorList) => hotkeyController.applyHotkeys(monitorList)
 
 let hotkeyOverlayTimeout
-let hotkeyThrottle = []
-let doingHotkey = false
-const hotkeyCycleIndexes = []
-async function doHotkey(hotkey) {
-  const now = Date.now()
-  if (!doingHotkey && (hotkeyThrottle[hotkey.id] === undefined || now > hotkeyThrottle[hotkey.id] + 100)) {
-
-    if (!hotkey.actions?.length) return false;
-
-    hotkeyThrottle[hotkey.id] = now
-    let showOverlay = false
-    doingHotkey = true
-    setRecentlyInteracted(true)
-
-    // First let's figure out where we're at in the cycle, if applicable
-
-    let hasCheckedFirstCycleAction = false
-
-    for (const action of hotkey.actions) {
-      try {
-
-        // Wait for refresh if user hasn't done so recently
-        if (action.type !== "refresh" && lastRefreshMonitors < Date.now() - 10000) {
-          await refreshMonitors()
-        }
-
-        if (action.type === "off") {
-          showOverlay = false
-          sleepDisplays(settings.sleepAction, 500)
-        } else if (action.type === "refresh") {
-          showOverlay = false
-          await refreshMonitors(true, true)
-        } else if (action.type === "set" || action.type === "offset" || action.type === "cycle") {
-
-          // Build list of all applicable monitors
-          const hotkeyMonitors = []
-
-          // Determine applicable monitors and new values
-          for (const monitor of Object.values(monitors)) {
-
-            let applicable = false
-            if (action.allMonitors || (settings.linkedLevelsActive && !settings.hotkeysBreakLinkedLevels)) {
-              // Target all monitors
-              applicable = true
-            } else if (Object.keys(action.monitors)?.length && action.monitors[monitor.id]) {
-              // Target specified monitors
-              applicable = true
-            }
-
-            if (applicable) {
-              // Determine new value
-              newValue = 0
-
-              if (action.type === "offset") {
-                let currentValue = 0
-                if (action.target === "brightness") {
-                  currentValue = monitor.brightness
-                } else if (action.target === "sdr") {
-                  currentValue = monitor.sdrLevel ?? 0
-                } else if (action.target === "contrast") {
-                  currentValue = await getVCP(monitor, parseInt("0x12"))
-                } else if (action.target === "volume") {
-                  currentValue = await getVCP(monitor, parseInt("0x62"))
-                } else if (action.target === "powerState") {
-                  currentValue = await getVCP(monitor, parseInt("0xD6"))
-                } else {
-                  // Get VCP
-                  currentValue = await getVCP(monitor, parseInt(action.target))
-                }
-                newValue = currentValue + parseInt(action.value);
-              } else if (action.type === "cycle") {
-                if (!action.values?.length) return -1;
-                if (!hotkeyCycleIndexes[hotkey.id]) {
-                  hotkeyCycleIndexes[hotkey.id] = 0
-                }
-
-                // Advance to the next value on the first "cycle" action
-                if (!hasCheckedFirstCycleAction) {
-                  hasCheckedFirstCycleAction = true
-                  if (hotkeyCycleIndexes[hotkey.id] >= action.values.length - 1) {
-                    // End of list, reset
-                    hotkeyCycleIndexes[hotkey.id] = 0
-                  } else {
-                    // Next value
-                    hotkeyCycleIndexes[hotkey.id]++
-                  }
-                }
-
-                newValue = action.values[hotkeyCycleIndexes[hotkey.id]];
-              } else if (action.type === "set") {
-                newValue = parseInt(action.value);
-              }
-
-              hotkeyMonitors.push({
-                monitor,
-                value: newValue
-              })
-            }
-
-          }
-
-          // Apply change
-          if (hotkeyMonitors?.length) {
-            for (const hotkeyMonitor of hotkeyMonitors) {
-              const { monitor, value } = hotkeyMonitor
-              if (action.target === "brightness") {
-                const normalizedAdjust = minMax(value)
-                monitors[monitor.key].brightness = normalizedAdjust
-                touchMonitors();
-                updateBrightnessThrottle(monitor.id, monitors[monitor.key].brightness, true, false)
-                pauseMonitorUpdates() // Stop incoming updates for a moment to prevent judder
-
-                // Break linked levels
-                if (settings.hotkeysBreakLinkedLevels && settings.linkedLevelsActive) {
-                  logger.debug("Breaking linked levels due to hotkey.")
-                  writeSettings({ linkedLevelsActive: false })
-                }
-                showOverlay = true
-              } else if(action.target === "sdr") {
-                updateBrightnessThrottle(monitor.id, parseInt(value), false, true, "sdr")
-              } else {
-                let vcpCode = action.target
-                if (action.target === "contrast") {
-                  vcpCode = "0x12"
-                } else if (action.target === "volume") {
-                  vcpCode = "0x62"
-                } else if (action.target === "powerState") {
-                  vcpCode = "0xD2"
-                }
-                updateBrightnessThrottle(monitor.id, parseInt(value), false, true, parseInt(vcpCode))
-                touchMonitors();
-              }
-            }
-          }
-
-        }
-
-
-        // Show brightness overlay, if applicable
-        // If panel isn't open, use the overlay
-        if (showOverlay && store.get("panel").panelState !== "visible") {
-          hotkeyOverlayStart(undefined, true)
-        }
-
-      } catch (e) {
-        logger.debug("HOTKEY ERROR:", e)
-      }
-    }
-
-    doingHotkey = false
-  }
-}
 
 function hotkeyOverlayStart(timeout = 3000, force = true) {
   if (currentOverlayType() === "disabled") return false;
@@ -1512,24 +1360,6 @@ function applyRemaps(monitorList = monitors) {
   return MonitorTransforms.applyRemaps(monitorList, settings.remaps)
 }
 
-function minMax(value, min = 0, max = 100) {
-  let out = value
-  if (value < min) out = min;
-  if (value > max) out = max;
-  return out;
-}
-
-function determineTheme(themeName) {
-  const lastTheme = store.get("theme").lastTheme
-  theme = themeName.toLowerCase()
-  if (theme === "dark" || theme === "light") return theme;
-  if (lastTheme && lastTheme.SystemUsesLightTheme) {
-    return "light"
-  } else {
-    return "dark"
-  }
-}
-
 function enableStartup(appName, appPath) {
     const runKey = reg.openKey(reg.HKCU, 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', reg.Access.ALL_ACCESS);
     reg.setValueSZ(runKey, appName, `"${appPath}"`);
@@ -1625,7 +1455,7 @@ function getLocalization() {
   T = new Translate(localization.desired, localization.default)
   sendToAllWindows("localization-updated", localization)
 
-  if(monitorsThreadReady) {
+  if(monitorsThreadStatus === "ready") {
     monitorsThread.send({
       type: "localization",
       localization: {
@@ -2148,8 +1978,7 @@ const refreshMonitorsJob = async (fullRefresh = false) => {
         // Attempt to fix common issue with wmi-bridge by relying only on Win32
         // However, if user re-enables WMI, don't disable it again
         if (!settings.autoDisabledWMI && !store.get("power").recentlyWokeUp) {
-          settings.autoDisabledWMI = true
-          settings.disableWMI = true
+          store.update("settings", { autoDisabledWMI: true, disableWMI: true })
         }
       }, 60000)
 
@@ -2175,7 +2004,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     return monitors
   }
 
-  if (!monitorsThreadReady || pausedMonitorUpdates) {
+  if (monitorsThreadStatus !== "ready" || pausedMonitorUpdates) {
     logger.debug("Sorry, no updates right now!")
     return monitors
   }
@@ -2230,7 +2059,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     for (let id in newMonitors) {
       const monitor = newMonitors[id]
       // Brightness
-      monitor.brightness = normalizeBrightness(monitor.brightness, true, monitor.min, monitor.max, monitor.calibration)
+      monitor.brightness = Utils.normalizeBrightness(monitor.brightness, true, monitor.min, monitor.max, monitor.calibration)
 
 
       // Replace DDC/CI brightness with SDR
@@ -2244,7 +2073,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
         // For each feature, check for matching normalization data
         for(const vcp in monitor.features) {
           if(featuresSettings[vcp] && featuresSettings[vcp].min >= 0 && featuresSettings[vcp].max <= 100) {
-            monitor.features[vcp][0] = normalizeBrightness(monitor.features[vcp][0], true, featuresSettings[vcp].min, featuresSettings[vcp].max)
+            monitor.features[vcp][0] = Utils.normalizeBrightness(monitor.features[vcp][0], true, featuresSettings[vcp].min, featuresSettings[vcp].max)
           }
         }
       }
@@ -2386,7 +2215,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
       return false
     }
 
-    const normalized = normalizeBrightness(level, false, (useCap ? monitor.min : 0), (useCap ? monitor.max : 100), (useCap ? monitor.calibration : []))
+    const normalized = Utils.normalizeBrightness(level, false, (useCap ? monitor.min : 0), (useCap ? monitor.max : 100), (useCap ? monitor.calibration : []))
 
     if (vcp === "sdr") {
       monitorsThread.send({
@@ -2427,19 +2256,19 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
                 processedLevel = maxBrightness
               }
 
-              const capped = parseInt(normalizeBrightness(processedLevel, true, 0, maxBrightness))
+              const capped = parseInt(Utils.normalizeBrightness(processedLevel, true, 0, maxBrightness))
               updateBrightnessThrottle(index, capped, useCap, false, vcp, clearTransition)
             }
           }
         }
       } else {
-        const vcpString = `0x${parseInt(vcp).toString(16).toUpperCase()}`
+        const vcpString = Utils.vcpStr(vcp)
         try {
           
           // Normalize VCP value, if applicable
           const featuresSettings = settings.monitorFeaturesSettings?.[monitor.hwid[1]]
           if(featuresSettings?.[vcp] && featuresSettings[vcp].min >= 0 && featuresSettings[vcp].max <= 100) {
-            level = normalizeBrightness(level, false, featuresSettings[vcp].min, featuresSettings[vcp].max)
+            level = Utils.normalizeBrightness(level, false, featuresSettings[vcp].min, featuresSettings[vcp].max)
           }
           
           if(monitor.features?.[vcpString]) {
@@ -2504,7 +2333,7 @@ function updateAllBrightness(brightness, mode = "offset") {
         monitor.brightness = monitor.sdrLevel
       }
 
-      let normalizedAdjust = minMax(mode == "set" ? brightness : brightness + monitor.brightness)
+      let normalizedAdjust = Utils.minMax(mode == "set" ? brightness : brightness + monitor.brightness)
 
       // Use linked levels, if applicable
       if (settings.linkedLevelsActive) {
@@ -2530,17 +2359,6 @@ function updateAllBrightness(brightness, mode = "offset") {
   }
 }
 
-
-function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, calibrationPoints = []) {
-  // normalize = true when recieving from Monitors.js
-  // normalize = false when sending to Monitors.js
-
-  const points = calibrationPoints.slice()
-  if(min > 0) points.push({ input: 0, output: min })
-  if(max < 100) points.push({ input: 100, output: max })
-
-  return Utils.getCalibratedValue(brightness, points, normalize)
-}
 
 let currentTransition = null
 function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}, onlyMonitorIds = null) {
@@ -3087,7 +2905,7 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
         for(const hwid2 in monitors) {
           const monitor = monitors[hwid2]
           if(monitor.type === "wmi") {
-            const normalized = normalizeBrightness(setting.data, true, monitor.min, monitor.max, monitor.calibration)
+            const normalized = Utils.normalizeBrightness(setting.data, true, monitor.min, monitor.max, monitor.calibration)
             monitor.brightness = normalized
             monitor.brightnessRaw = setting.data
           }
@@ -3435,7 +3253,6 @@ let lastPanelTime = process.hrtime.bigint()
 let primaryRefreshRate = 59.97
 let primaryDPI = 1
 let mainWindowHandle
-let easeOutQuad = t => 1 + (--t) * t * t * t * t
 
 // Set brightness panel state (visible or not)
 function showPanel(show = true, height = 300) {
@@ -3606,7 +3423,7 @@ function doAnimationStep() {
     }
 
     // LERP height and opacity
-    let calculatedHeight = panelHeight - (panelMaxHeight * primaryDPI) + Math.round(easeOutQuad(currentPanelTime / panelTransitionTime) * (panelMaxHeight * primaryDPI))
+    let calculatedHeight = panelHeight - (panelMaxHeight * primaryDPI) + Math.round(Utils.easeOutQuad(currentPanelTime / panelTransitionTime) * (panelMaxHeight * primaryDPI))
     let calculatedOpacity = (Math.round(Math.min(1, currentPanelTime / (panelTransitionTime / 6)) * 100) / 100)
 
     // Apply panel size
@@ -5340,7 +5157,7 @@ function handleCommandLine(event, argv, directory, additionalData) {
           logger.debug(`Setting brightness via command line: All @ ${brightness}%`);
           updateAllBrightness(brightness, type)
         } else {
-          const newBrightness = minMax(type === "set" ? brightness : display.brightness + brightness)
+          const newBrightness = Utils.minMax(type === "set" ? brightness : display.brightness + brightness)
           logger.debug(`Setting brightness via command line: Display #${display.num} (${display.name}) @ ${newBrightness}%`);
           updateBrightnessThrottle(display.id, newBrightness, true)
         }
@@ -5579,7 +5396,7 @@ const handleClientMessage = async (message, remote) => {
       if (!monitor) throw("Couldn't find monitor!");
 
       if (data.vcp === "brightness") {
-        const newBrightness = minMax(data.mode !== "offset" ? value : monitor.brightness + value)
+        const newBrightness = Utils.minMax(data.mode !== "offset" ? value : monitor.brightness + value)
         updateBrightnessThrottle(monitor.id, newBrightness, true)
       } else {
         monitorsThread.send({

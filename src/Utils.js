@@ -226,8 +226,13 @@ Flag to show brightness levels in the panel
     upgradeAdjustmentTimes,
     getVersionValue,
     lerp,
+    easeOutQuad,
     parseTime,
-    getCalibratedValue
+    getCalibratedValue,
+    normalizeBrightness,
+    minMax,
+    vcpStr,
+    determineTheme
 }
 
 
@@ -266,6 +271,11 @@ function getVersionValue(version = 'v1.0.0') {
 
 function lerp(start, finish, perc) {
     return start * (1 - perc) + finish * perc
+}
+
+// Quintic ease-out: maps progress t (0..1) to an eased 0..1 value.
+function easeOutQuad(t) {
+    return 1 + (--t) * t * t * t * t
 }
 
 function parseTime(time) {
@@ -367,4 +377,40 @@ function getCalibratedValue(value, calibrationPoints = [], reverse = false) {
         // Fallback
         return value;
     }
+}
+
+// Clamp a value into the [min, max] range (defaults 0–100).
+function minMax(value, min = 0, max = 100) {
+    let out = value
+    if (value < min) out = min;
+    if (value > max) out = max;
+    return out;
+}
+
+// Format a VCP code as an uppercase "0x.." string (e.g. 18 -> "0x12").
+function vcpStr(code) {
+    return `0x${parseInt(code).toString(16).toUpperCase()}`
+}
+
+// Resolve a theme setting ("dark"/"light"/anything else) to "dark" or "light".
+// An explicit dark/light wins; otherwise fall back to the last known system
+// theme (lastTheme.SystemUsesLightTheme), defaulting to dark.
+function determineTheme(themeName, lastTheme) {
+    const theme = themeName.toLowerCase()
+    if (theme === "dark" || theme === "light") return theme;
+    if (lastTheme && lastTheme.SystemUsesLightTheme) {
+        return "light"
+    } else {
+        return "dark"
+    }
+}
+
+// Map a brightness value through min/max caps and any calibration points.
+// normalize = true when receiving from Monitors.js, false when sending to it.
+function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, calibrationPoints = []) {
+    const points = calibrationPoints.slice()
+    if (min > 0) points.push({ input: 0, output: min })
+    if (max < 100) points.push({ input: 100, output: max })
+
+    return getCalibratedValue(brightness, points, normalize)
 }
