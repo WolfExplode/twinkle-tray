@@ -224,6 +224,7 @@ Flag to show brightness levels in the panel
         0x62: "volume"
     },
     upgradeAdjustmentTimes,
+    migrateSettings,
     getVersionValue,
     lerp,
     easeOutQuad,
@@ -263,6 +264,180 @@ function upgradeAdjustmentTimes(times = []) {
 }
 
 // Convert version to a numeric value (v1.2.3 = 10020003)
+// Apply all version-guarded settings migrations in place, upgrading an
+// on-disk settings object to the current schema. Extracted verbatim from
+// electron.js readSettings() so the upgrade/downgrade paths can be unit tested.
+//
+// Mutates `settings` directly (preserving the original behaviour, including key
+// deletions). Side effects on other state are returned as flags rather than
+// performed here, keeping this a pure transform over `settings`:
+//   - resetKnownDisplays: caller should clear the monitors "lastKnownDisplays".
+//
+// ctx:
+//   appVersionValue : numeric value of the running app version (getVersionValue)
+//   makeUuid        : () => string, used to mint ids during upgrades
+//   log             : (…args) => void, optional debug logger
+function migrateSettings(settings, ctx = {}) {
+    const { appVersionValue = 0, makeUuid = () => undefined, log = () => {} } = ctx
+    const result = { resetKnownDisplays: false }
+
+    if (settings.updateInterval === 999) settings.updateInterval = 100;
+
+    if (settings.monitorFocusTimeUnit === "seconds") {
+        settings.monitorFocusSeconds = settings.monitorFocusMinutes || 0
+        settings.monitorFocusMinutes = 0
+        delete settings.monitorFocusTimeUnit
+    } else if (settings.monitorFocusTimeUnit) {
+        delete settings.monitorFocusTimeUnit
+    }
+    if (settings.monitorFocusSeconds === undefined) settings.monitorFocusSeconds = 0
+
+    // Upgrade settings
+    const settingsVersion = getVersionValue(settings.settingsVer)
+    if (settingsVersion < getVersionValue("v1.15.0")) {
+        // v1.15.0
+        try {
+            // Upgrade adjustment times
+            const upgradedTimes = upgradeAdjustmentTimes(settings.adjustmentTimes)
+            settings.adjustmentTimes = upgradedTimes
+            log("Upgraded Adjustment Times to v1.15.0 format!")
+        } catch (e) {
+            log("Couldn't upgrade Adjustment Times", e)
+        }
+        try {
+            // Upgrade idle settings
+            if (settings.detectIdleTime) {
+                if (settings.detectIdleTime * 1 > 0) {
+                    settings.detectIdleTimeEnabled = true
+                    settings.detectIdleTimeSeconds = (settings.detectIdleTime * 1) % 60
+                    settings.detectIdleTimeMinutes = Math.floor((settings.detectIdleTime * 1) / 60)
+                }
+                delete settings.detectIdleTime
+            }
+            log("Upgraded Idle settings to v1.15.0 format!")
+        } catch (e) {
+            log("Couldn't upgrade Idle settings", e)
+        }
+    } else if (appVersionValue < getVersionValue("v1.16.0") && settingsVersion >= getVersionValue("v1.16.0")) {
+        // Downgrade from v1.16.0+
+        if (settings.hotkeysPre1160) {
+            settings.hotkeys = settings.hotkeysPre1160
+        } else {
+            settings.hotkeys = {}
+        }
+        log("Downgraded settings from v1.16.0+ format!")
+    }
+    if (settingsVersion < getVersionValue("v1.16.0")) {
+        // v1.16.0
+        result.resetKnownDisplays = true // Reset lastKnownDisplays due to known bug in earlier versions
+        try {
+            // Upgrade hotkeys
+            if (settings.hotkeys && Object.values(settings.hotkeys)?.length >= 0) {
+                settings.hotkeysPre1160 = settings.hotkeys // Save old hotkeys in case of downgrade
+
+                const newHotkeys = []
+                for (const hotkey of Object.values(settings.hotkeys)) {
+                    const newHotkey = {
+                        accelerator: hotkey.accelerator,
+                        id: makeUuid(),
+                        actions: [
+                            {
+                                monitors: {},
+                                target: "brightness",
+                                values: [0],
+                                value: 0,
+                                allMonitors: false
+                            }
+                        ]
+                    }
+                    if (hotkey.monitor === "turn_off_displays") {
+                        newHotkey.actions[0].type = "off"
+                    } else {
+                        newHotkey.monitors = {}
+                        if (hotkey.monitor === "all") {
+                            newHotkey.actions[0].allMonitors = true
+                        } else {
+                            newHotkey.actions[0].monitors[hotkey.monitor] = true
+                        }
+                        newHotkey.actions[0].type = "offset"
+                        newHotkey.actions[0].value = settings.hotkeyPercent * hotkey.direction
+                    }
+                    newHotkeys.push(newHotkey)
+                }
+                settings.hotkeys = newHotkeys
+            }
+            log(`Upgraded ${settings.hotkeys.length} hotkeys to v1.16.0 format!`)
+        } catch (e) {
+            log("Couldn't upgrade hotkeys", e)
+        }
+        try {
+            // Upgrade Adjustment Times for SunCalc
+            for (const time of settings.adjustmentTimes) {
+                time.useSunCalc = false
+                time.sunCalc = "sunrise"
+            }
+            log("Upgraded Adjustment Times to v1.16.0 format!")
+        } catch (e) {
+            log("Couldn't upgrade Adjustment Times", e)
+        }
+        try {
+            // Upgrade Monitor Features for v1.16.0
+            const newMonitorFeatures = {}
+            for (const monitorID in settings.monitorFeatures) {
+                newMonitorFeatures[monitorID] = {}
+                for (const featureName in settings.monitorFeatures[monitorID]) {
+                    if (featureName === "contrast") {
+                        newMonitorFeatures[monitorID]["0x12"] = settings.monitorFeatures[monitorID][featureName]
+                    } else if (featureName === "volume") {
+                        newMonitorFeatures[monitorID]["0x62"] = settings.monitorFeatures[monitorID][featureName]
+                    } else if (featureName === "powerState") {
+                        newMonitorFeatures[monitorID]["0xD6"] = settings.monitorFeatures[monitorID][featureName]
+                    }
+                }
+            }
+            settings.monitorFeatures = newMonitorFeatures
+            log("Upgraded Monitor Features to v1.16.0 format!")
+        } catch (e) {
+            log("Couldn't upgrade Monitor Features", e)
+        }
+        try {
+            // Remove disableOverlay
+            if (settings.disableOverlay === true) {
+                settings.defaultOverlayType = "disabled"
+            }
+            if (settings.disableOverlay !== undefined) {
+                delete settings.disableOverlay
+            }
+        } catch (e) {
+            log("Couldn't remove disableOverlay")
+        }
+    }
+
+    if (settingsVersion < getVersionValue("v1.16.1")) {
+        // Disable win32display-config events by default as of v1.16.1
+        // settings.useWin32Event = false
+    }
+
+    // Fix missing UUIDs for app profiles
+    if (settings.profiles?.length) {
+        for (const profile of settings.profiles) {
+            if (!profile.uuid) {
+                profile.uuid = makeUuid()
+            }
+        }
+    }
+
+    // Fix rawSettings bug
+    if (settings.rawSettings) delete settings.rawSettings;
+
+    // Remove hdrDisplays from v1.17.0-beta1
+    if (settings.settingsVer == "v1.17.0-beta1" || settingsVersion < getVersionValue("v1.16.8")) {
+        if (settings.hdrDisplays) delete settings.hdrDisplays;
+    }
+
+    return result
+}
+
 function getVersionValue(version = 'v1.0.0') {
     let out = version.split('-')[0].replace("v", "").split(".")
     out = (out[0] * 10000 * 10000) + (out[1] * 10000) + (out[2] * 1)

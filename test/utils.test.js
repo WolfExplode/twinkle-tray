@@ -10,6 +10,97 @@ test('parseTime converts HH:MM to minutes since midnight', () => {
   assert.strictEqual(Utils.parseTime("12:00"), 720)
 })
 
+// --- migrateSettings -------------------------------------------------------
+// A high app version so the downgrade branch never triggers in these tests.
+const NEWER_APP = Utils.getVersionValue("v9.0.0")
+// uuid stub that yields deterministic ids
+const seqUuid = () => { seqUuid.n = (seqUuid.n || 0) + 1; return `uuid-${seqUuid.n}` }
+
+test('migrateSettings converts monitorFocusTimeUnit "seconds" to seconds', () => {
+  const s = { settingsVer: "v9.0.0", monitorFocusTimeUnit: "seconds", monitorFocusMinutes: 3 }
+  Utils.migrateSettings(s, { appVersionValue: NEWER_APP })
+  assert.strictEqual(s.monitorFocusSeconds, 3)
+  assert.strictEqual(s.monitorFocusMinutes, 0)
+  assert.ok(!("monitorFocusTimeUnit" in s))
+})
+
+test('migrateSettings normalizes updateInterval 999 -> 100', () => {
+  const s = { settingsVer: "v9.0.0", updateInterval: 999 }
+  Utils.migrateSettings(s, { appVersionValue: NEWER_APP })
+  assert.strictEqual(s.updateInterval, 100)
+})
+
+test('migrateSettings (v1.15) upgrades legacy detectIdleTime into enabled/min/sec', () => {
+  const s = { /* no settingsVer -> oldest */ detectIdleTime: "125", adjustmentTimes: [], hotkeys: {}, monitorFeatures: {} }
+  Utils.migrateSettings(s, { appVersionValue: NEWER_APP, makeUuid: seqUuid })
+  assert.strictEqual(s.detectIdleTimeEnabled, true)
+  assert.strictEqual(s.detectIdleTimeSeconds, 5)
+  assert.strictEqual(s.detectIdleTimeMinutes, 2)
+  assert.ok(!("detectIdleTime" in s))
+})
+
+test('migrateSettings (v1.16) converts legacy hotkeys object to the action array form', () => {
+  const s = {
+    settingsVer: "v1.15.0",
+    adjustmentTimes: [],
+    monitorFeatures: {},
+    hotkeyPercent: 10,
+    hotkeys: { "0": { accelerator: "Ctrl+Up", monitor: "all", direction: 1 } }
+  }
+  const { resetKnownDisplays } = Utils.migrateSettings(s, { appVersionValue: NEWER_APP, makeUuid: seqUuid })
+  assert.ok(Array.isArray(s.hotkeys))
+  assert.strictEqual(s.hotkeys.length, 1)
+  const action = s.hotkeys[0].actions[0]
+  assert.strictEqual(action.type, "offset")
+  assert.strictEqual(action.allMonitors, true)
+  assert.strictEqual(action.value, 10) // hotkeyPercent * direction
+  assert.ok(s.hotkeysPre1160, "keeps the pre-1.16 hotkeys for downgrade")
+  assert.strictEqual(resetKnownDisplays, true)
+})
+
+test('migrateSettings (v1.16) remaps named monitorFeatures to VCP codes', () => {
+  const s = {
+    settingsVer: "v1.15.0",
+    adjustmentTimes: [],
+    hotkeys: {},
+    monitorFeatures: { MON_A: { contrast: [50], volume: [30], powerState: [1] } }
+  }
+  Utils.migrateSettings(s, { appVersionValue: NEWER_APP, makeUuid: seqUuid })
+  assert.deepStrictEqual(s.monitorFeatures.MON_A, { "0x12": [50], "0x62": [30], "0xD6": [1] })
+})
+
+test('migrateSettings (v1.16) turns disableOverlay into defaultOverlayType and drops it', () => {
+  const s = { settingsVer: "v1.15.0", adjustmentTimes: [], hotkeys: {}, monitorFeatures: {}, disableOverlay: true }
+  Utils.migrateSettings(s, { appVersionValue: NEWER_APP, makeUuid: seqUuid })
+  assert.strictEqual(s.defaultOverlayType, "disabled")
+  assert.ok(!("disableOverlay" in s))
+})
+
+test('migrateSettings backfills missing profile uuids and strips rawSettings/hdrDisplays', () => {
+  // hdrDisplays removal is gated to pre-v1.16.8 settings.
+  const s = {
+    settingsVer: "v1.16.0",
+    adjustmentTimes: [],
+    hotkeys: {},
+    monitorFeatures: {},
+    profiles: [{ name: "a" }, { name: "b", uuid: "keep" }],
+    rawSettings: { junk: true },
+    hdrDisplays: { x: 1 }
+  }
+  Utils.migrateSettings(s, { appVersionValue: NEWER_APP, makeUuid: () => "GEN" })
+  assert.strictEqual(s.profiles[0].uuid, "GEN")
+  assert.strictEqual(s.profiles[1].uuid, "keep")
+  assert.ok(!("rawSettings" in s))
+  assert.ok(!("hdrDisplays" in s))
+})
+
+test('migrateSettings on a current-version settings does not reset known displays', () => {
+  const s = { settingsVer: "v9.0.0", hotkeys: [{ id: "x" }] }
+  const { resetKnownDisplays } = Utils.migrateSettings(s, { appVersionValue: NEWER_APP })
+  assert.strictEqual(resetKnownDisplays, false)
+  assert.deepStrictEqual(s.hotkeys, [{ id: "x" }], "leaves modern hotkeys untouched")
+})
+
 test('minMax clamps to the given range, default 0-100', () => {
   assert.strictEqual(Utils.minMax(50), 50)
   assert.strictEqual(Utils.minMax(-5), 0)
