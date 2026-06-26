@@ -1430,11 +1430,13 @@ const displayColor = createDisplayColor({
   settings,
   sendToAllWindows,
   setTrayStatus,
+  setTrayMenu,
+  // toggleTray is a `const` defined later in the file, so it's in the temporal
+  // dead zone right now — inject a lazy wrapper rather than a direct reference.
+  toggleTray: (...args) => toggleTray(...args),
   getCurrentAdjustmentEvent
 })
 const {
-  warmthLevels,
-  highlightLevels,
   manualWarmthLevels,
   manualHighlightLevels,
   updateDisplayColor,
@@ -1443,8 +1445,11 @@ const {
   sendDisplayColorLevels,
   hideDisplayColorEffects,
   showDisplayColorEffects,
-  getScheduledColorForMonitor,
-  applyCurrentDisplayColorEffects
+  applyCurrentDisplayColorEffects,
+  getCurrentKelvin,
+  sendColorToggleState,
+  toggleColorTemperature,
+  toggleHighlightCompression
 } = displayColor
 
 ipcMain.on('send-settings', (event, data) => {
@@ -3187,23 +3192,8 @@ function getHighlightCompressionMenuItem() {
   }
 }
 
-function getCurrentKelvin() {
-  try {
-    if (!store.get("color").manualTemperatureActive && !settings.adjustmentTimeTemperatureEnabled) return 6500
-    const activeLevels = Object.values(warmthLevels).filter(k => k > 0 && k < 6500)
-    if (activeLevels.length) {
-      return Math.round(activeLevels.reduce((a, b) => a + b, 0) / activeLevels.length)
-    }
-    const event = getCurrentAdjustmentEvent()
-    if (event?.kelvin != null) return event.kelvin
-  } catch (e) { }
-  return 6500
-}
-
-function sendColorToggleState() {
-  const color = store.get("color")
-  sendToAllWindows('color-toggle-state', { manualTemperatureActive: color.manualTemperatureActive, manualHighlightActive: color.manualHighlightActive })
-}
+// getCurrentKelvin and sendColorToggleState now live in ./displayColor.js
+// (destructured above); they're closer to the colour state they read.
 
 function sendScheduleLockState() {
   sendToAllWindows('schedule-lock-state', {
@@ -3217,63 +3207,9 @@ function toggleTimeAdjustments() {
   writeSettings({ adjustmentTimesActive: !settings.adjustmentTimesActive }, true, true)
 }
 
-function toggleColorEffect(type, openPanel = false) {
-  const isTemp = type === 'temperature'
-  const effectiveLevels = isTemp ? warmthLevels : highlightLevels
-  const manualLevels = isTemp ? manualWarmthLevels : manualHighlightLevels
-  const scheduleKey = isTemp ? 'adjustmentTimeTemperatureEnabled' : 'adjustmentTimeHighlightCompressionEnabled'
-  const scheduledProp = isTemp ? 'kelvin' : 'highlightWeight'
-  const defaultValue = isTemp ? 6500 : 0
-  const shouldPreserve = isTemp ? (v) => v != null && v < 6500 : (v) => v != null && v > 0
-  const applyManual = isTemp
-    ? (id, v) => updateWarmth(id, v)
-    : (id, v) => updateHighlightCompression(id, v)
-  const applyDisplay = isTemp
-    ? (id, v) => updateDisplayColor(id, { kelvin: v })
-    : (id, v) => updateDisplayColor(id, { highlightWeight: v })
-
-  const activeKey = isTemp ? 'manualTemperatureActive' : 'manualHighlightActive'
-  const wasActive = store.get("color")[activeKey]
-  if (wasActive) {
-    // Preserve current effective value before turning off
-    for (const key in monitors) {
-      const id = monitors[key].id
-      const val = effectiveLevels[id] ?? manualLevels[id]
-      if (shouldPreserve(val)) manualLevels[id] = val
-    }
-  }
-
-  const nowActive = !wasActive
-  store.update("color", { [activeKey]: nowActive })
-
-  if (nowActive) {
-    for (const key in monitors) {
-      const id = monitors[key].id
-      applyManual(id, manualLevels[id] ?? effectiveLevels[id] ?? defaultValue)
-    }
-  } else {
-    const foundEvent = settings[scheduleKey] ? getCurrentAdjustmentEvent() : null
-    for (const key in monitors) {
-      const monitor = monitors[key]
-      const updates = foundEvent ? getScheduledColorForMonitor(monitor, foundEvent) : {}
-      applyDisplay(monitor.id, updates[scheduledProp] ?? defaultValue)
-    }
-  }
-  setTrayMenu()
-  setTrayStatus()
-  sendColorToggleState()
-  if (openPanel && nowActive) {
-    setTimeout(() => toggleTray(true), 100)
-  }
-}
-
-function toggleColorTemperature(openPanel = false) {
-  toggleColorEffect('temperature', openPanel)
-}
-
-function toggleHighlightCompression(openPanel = false) {
-  toggleColorEffect('highlight', openPanel)
-}
+// toggleColorEffect / toggleColorTemperature / toggleHighlightCompression now
+// live in ./displayColor.js (destructured above), alongside the level maps and
+// apply functions they drive.
 
 function setTrayStatus() {
   try {
