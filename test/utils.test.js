@@ -101,6 +101,37 @@ test('migrateSettings on a current-version settings does not reset known display
   assert.deepStrictEqual(s.hotkeys, [{ id: "x" }], "leaves modern hotkeys untouched")
 })
 
+test('migrateSettings stamps settingsVer/Build when given an appVersion', () => {
+  const s = { settingsVer: "v9.0.0" }
+  const { changed } = Utils.migrateSettings(s, { appVersionValue: NEWER_APP, appVersion: "9.0.0", appBuild: "abc" })
+  assert.strictEqual(s.settingsVer, "v9.0.0")
+  assert.strictEqual(s.settingsBuild, "abc")
+  // monitorFocusSeconds defaulting still counts as a change
+  assert.strictEqual(changed, true)
+})
+
+test('migrateSettings reports changed=false for an already-current settings', () => {
+  const s = { settingsVer: "v9.0.0", monitorFocusSeconds: 0 }
+  const { changed } = Utils.migrateSettings(s, { appVersionValue: NEWER_APP, appVersion: "9.0.0" })
+  assert.strictEqual(changed, false)
+})
+
+test('migrateSettings is idempotent: a second run on its own output is a no-op', () => {
+  const s = {
+    /* oldest version -> triggers everything */
+    adjustmentTimes: [],
+    monitorFeatures: { MON_A: { contrast: [50] } },
+    hotkeyPercent: 10,
+    hotkeys: { "0": { accelerator: "Ctrl+Up", monitor: "all", direction: 1 } },
+    profiles: [{ name: "a" }]
+  }
+  const ctx = { appVersionValue: NEWER_APP, appVersion: "9.0.0", makeUuid: seqUuid }
+  const first = Utils.migrateSettings(s, ctx)
+  assert.strictEqual(first.changed, true)
+  const second = Utils.migrateSettings(s, ctx)
+  assert.strictEqual(second.changed, false, 'second run must not modify already-migrated settings')
+})
+
 test('minMax clamps to the given range, default 0-100', () => {
   assert.strictEqual(Utils.minMax(50), 50)
   assert.strictEqual(Utils.minMax(-5), 0)

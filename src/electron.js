@@ -608,9 +608,8 @@ function readSettings(doProcessSettings = true) {
   }
 
   // Overrides
-  settings.isDev = isDev
-  settings.killWhenIdle = false
-  if (settings.adjustmentTimesActive === undefined) settings.adjustmentTimesActive = true
+  updateSettings({ isDev, killWhenIdle: false })
+  if (settings.adjustmentTimesActive === undefined) updateSettings({ adjustmentTimesActive: true })
   tempSettings.pauseTimeAdjustments = !settings.adjustmentTimesActive
 
   if(!isDev && settings.showConsole && !app.commandLine.hasSwitch("console")) {
@@ -618,12 +617,19 @@ function readSettings(doProcessSettings = true) {
   }
 
   // Apply all version-guarded schema migrations (see Utils.migrateSettings).
-  const { resetKnownDisplays } = Utils.migrateSettings(settings, {
+  const { resetKnownDisplays, changed } = Utils.migrateSettings(settings, {
     appVersionValue: Utils.getVersionValue(`v${app.getVersion()}`),
+    appVersion,
+    appBuild,
     makeUuid: uuid,
     log: logger.debug
   })
   if (resetKnownDisplays) store.update("monitors", { lastKnownDisplays: {} })
+
+  // The persist subscription isn't registered until just after boot-load, so an
+  // upgrade applied here would otherwise only reach disk on the next settings
+  // write (lost if the app exits first). Flush it now when something changed.
+  if (changed) persistSettings()
 
   if (doProcessSettings) processSettings({ isReadSettings: true });
 }
@@ -664,6 +670,15 @@ function persistSettings() {
   }, 333)
 }
 
+// Mutate the settings slice through the store. Prefer this over assigning to
+// `settings.x` directly: an in-place assignment bypasses the store's change
+// event, so it is neither broadcast nor persisted (it would only reach disk on
+// the next unrelated settings write). Unlike writeSettings, this does not
+// re-run processSettings, so it is safe to call from within it.
+function updateSettings(patch) {
+  return store.update("settings", patch)
+}
+
 
 function processSettings(newSettings = {}, sendUpdate = true) {
 
@@ -673,8 +688,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
   try {
 
-    settings.settingsVer = "v" + appVersion
-    settings.settingsBuild = appBuild
+    // settingsVer/settingsBuild are stamped at boot by Utils.migrateSettings.
 
     if (settings.theme) {
       nativeTheme.themeSource = Utils.determineTheme(settings.theme, store.get("theme").lastTheme)
@@ -831,11 +845,11 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.windowsStyle !== undefined) {
       if (newSettings.windowsStyle === "win11") {
-        settings.isWin11 = true
+        updateSettings({ isWin11: true })
       } else if (newSettings.windowsStyle === "win10") {
-        settings.isWin11 = false
+        updateSettings({ isWin11: false })
       } else {
-        settings.isWin11 = isReallyWin11
+        updateSettings({ isWin11: isReallyWin11 })
       }
       newSettings.useAcrylic = settings.useAcrylic
       broadcastThemeSettings()

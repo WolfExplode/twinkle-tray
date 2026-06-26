@@ -273,13 +273,22 @@ function upgradeAdjustmentTimes(times = []) {
 // performed here, keeping this a pure transform over `settings`:
 //   - resetKnownDisplays: caller should clear the monitors "lastKnownDisplays".
 //
+// Migrations are idempotent: this stamps settings.settingsVer (when ctx.appVersion
+// is given) so a re-run on already-migrated data is a no-op. The returned
+// `changed` flag reports whether anything was actually modified, so the caller
+// can persist immediately after a boot-time upgrade (and skip a needless rewrite
+// otherwise).
+//
 // ctx:
 //   appVersionValue : numeric value of the running app version (getVersionValue)
+//   appVersion      : version string to stamp as settingsVer (e.g. "1.17.2")
+//   appBuild        : build string to stamp as settingsBuild
 //   makeUuid        : () => string, used to mint ids during upgrades
 //   log             : (…args) => void, optional debug logger
 function migrateSettings(settings, ctx = {}) {
-    const { appVersionValue = 0, makeUuid = () => undefined, log = () => {} } = ctx
-    const result = { resetKnownDisplays: false }
+    const { appVersionValue = 0, appVersion, appBuild, makeUuid = () => undefined, log = () => {} } = ctx
+    const result = { resetKnownDisplays: false, changed: false }
+    const before = JSON.stringify(settings)
 
     if (settings.updateInterval === 999) settings.updateInterval = 100;
 
@@ -435,6 +444,11 @@ function migrateSettings(settings, ctx = {}) {
         if (settings.hdrDisplays) delete settings.hdrDisplays;
     }
 
+    // Stamp the current version so a future run is a no-op (idempotent).
+    if (appVersion !== undefined) settings.settingsVer = "v" + appVersion
+    if (appBuild !== undefined) settings.settingsBuild = appBuild
+
+    result.changed = JSON.stringify(settings) !== before
     return result
 }
 
