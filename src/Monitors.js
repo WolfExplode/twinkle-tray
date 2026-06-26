@@ -1,3 +1,4 @@
+"use strict"
 // Forward this forked child's logs to the main process so they flow through
 // the single logger (and reach the log file). Falls back to local console when
 // running detached. The parent tags these as [MON].
@@ -150,13 +151,14 @@ let canUseWmiBridge = false
 let ddcBrightnessVCPs = {}
 
 let busyLevel = 0
-refreshMonitors = async (fullRefresh = false, ddcciType = "default", alwaysSendUpdate = false) => {
+async function refreshMonitors(fullRefresh = false, ddcciType = "default", alwaysSendUpdate = false) {
+    // A busy lock belongs to the in-flight refresh; don't stack a second one.
+    if (busyLevel > 0) {
+        console.log("Thread busy. Cancelling refresh.")
+        return false
+    }
+    busyLevel = (fullRefresh ? 2 : 1)
     try {
-        if ((busyLevel > 0 && !fullRefresh) || (busyLevel > 0 && fullRefresh)) {
-            console.log("Thread busy. Cancelling refresh.")
-            return false
-        }
-        busyLevel = (fullRefresh ? 2 : 1)
 
         if (!monitors || fullRefresh) {
             const foundMonitors = await getAllMonitors(determineDDCCIMethod())
@@ -236,7 +238,7 @@ refreshMonitors = async (fullRefresh = false, ddcciType = "default", alwaysSendU
             if (!settings?.disableHDR) {
                 try {
                     startTime = process.hrtime.bigint()
-                    monitorsHDR = await getHDRDisplays(monitors);
+                    await getHDRDisplays(monitors);
                     console.log(`getHDRDisplays() Total: ${(startTime - process.hrtime.bigint()) / BigInt(-1000000)}ms`)
                 } catch (e) {
                     console.log("\x1b[41m" + "getHDRDisplays() failed!" + "\x1b[0m", e)
@@ -252,14 +254,17 @@ refreshMonitors = async (fullRefresh = false, ddcciType = "default", alwaysSendU
             }
 
         }
-    } catch (e) { console.log(e) }
+    } catch (e) {
+        console.log(e)
+    } finally {
+        busyLevel = 0
+    }
 
-    busyLevel = 0
     return monitors
 }
 
 
-getAllMonitors = async (ddcciMethod = "default") => {
+async function getAllMonitors(ddcciMethod = "default") {
     const foundMonitors = {}
     let startTime = process.hrtime.bigint()
     let fullStartTime = process.hrtime.bigint()
@@ -429,7 +434,7 @@ getAllMonitors = async (ddcciMethod = "default") => {
     if (!settings.disableHDR) {
         try {
             startTime = process.hrtime.bigint()
-            monitorsHDR = await getHDRDisplays(foundMonitors);
+            await getHDRDisplays(foundMonitors);
             console.log(`getHDRDisplays() Total: ${(startTime - process.hrtime.bigint()) / BigInt(-1000000)}ms`)
         } catch (e) {
             console.log("\x1b[41m" + "getHDRDisplays() failed!" + "\x1b[0m", e)
@@ -475,7 +480,7 @@ function determineDDCCIMethod() {
 }
 
 let appleStudioUnavailable = false
-getStudioDisplay = async (monitors) => {
+async function getStudioDisplay(monitors) {
     try {
         const sdctl = require("studio-display-control")
         const displays = {}
@@ -506,7 +511,7 @@ getStudioDisplay = async (monitors) => {
     return {}
 }
 
-setStudioDisplayBrightness = async (serial, brightness) => {
+async function setStudioDisplayBrightness(serial, brightness) {
     try {
         const sdctl = require("studio-display-control")
         for (const monitor of sdctl.getDisplays()) {
@@ -520,7 +525,7 @@ setStudioDisplayBrightness = async (serial, brightness) => {
     }
 }
 
-getHDRDisplays = async (monitors) => {
+async function getHDRDisplays(monitors) {
     try {
         const displays = hdr.getDisplays()
         lastHDR = displays
@@ -551,7 +556,7 @@ getHDRDisplays = async (monitors) => {
 }
 
 let wmiFailed = false
-getMonitorsWMI = () => {
+function getMonitorsWMI() {
     return new Promise(async (resolve, reject) => {
         const foundMonitors = {}
         try {
@@ -562,7 +567,7 @@ getMonitorsWMI = () => {
                 // Something went wrong
                 console.log("\x1b[41m" + "Recieved FAILED response from getMonitors()" + "\x1b[0m")
                 clearTimeout(timeout)
-                resolve(foundMonitor)
+                resolve(foundMonitors)
             } else {
                 // Sort through results
                 for (let monitorHWID in wmiMonitors) {
@@ -598,7 +603,7 @@ getMonitorsWMI = () => {
 }
 
 let win32Failed = false
-getMonitorsWin32 = () => {
+function getMonitorsWin32() {
     let foundDisplays = {}
     return new Promise(async (resolve, reject) => {
         try {
@@ -645,7 +650,7 @@ getMonitorsWin32 = () => {
     })
 }
 
-getFeaturesDDC = (ddcciMethod = "accurate") => {
+function getFeaturesDDC(ddcciMethod = "accurate") {
     const monitorFeatures = {}
     return new Promise(async (resolve, reject) => {
         try {
@@ -720,7 +725,7 @@ getFeaturesDDC = (ddcciMethod = "accurate") => {
     })
 }
 
-checkMonitorFeatures = async (monitor, skipCache = false, ddcciMethod = "accurate") => {
+async function checkMonitorFeatures(monitor, skipCache = false, ddcciMethod = "accurate") {
     return new Promise(async (resolve, reject) => {
         const features = {}
         try {
@@ -779,7 +784,7 @@ checkMonitorFeatures = async (monitor, skipCache = false, ddcciMethod = "accurat
     })
 }
 
-determineBrightnessVCPCode = async (monitor) => {
+async function determineBrightnessVCPCode(monitor) {
     const hwid = monitor.split("#")
     if(ddcBrightnessVCPs?.[hwid[1]]) {
         return parseInt(ddcBrightnessVCPs[hwid[1]])
@@ -799,7 +804,7 @@ determineBrightnessVCPCode = async (monitor) => {
     return false
 }
 
-getBrightnessWMI = () => {
+function getBrightnessWMI() {
     // Request WMI monitors.
     return new Promise(async (resolve, reject) => {
         try {
@@ -840,7 +845,7 @@ getBrightnessWMI = () => {
 
 }
 
-getBrightnessDDC = (monitorObj) => {
+function getBrightnessDDC(monitorObj) {
     return new Promise(async (resolve, reject) => {
         let monitor = Object.assign({}, monitorObj)
 
@@ -907,7 +912,7 @@ getBrightnessDDC = (monitorObj) => {
     })
 }
 
-updateDisplay = (monitors, hwid2, info = {}) => {
+function updateDisplay(monitors, hwid2, info = {}) {
     if (!monitors[hwid2]) {
         monitors[hwid2] = {
             id: null,
@@ -1207,7 +1212,7 @@ function getWMIC() {
 getWMIC();
 
 // Request Monitors via WMIC. (Windows 10 only)
-getMonitorsWMIC = () => {
+function getMonitorsWMIC() {
 
     return new Promise((resolve, reject) => {
         const wmiOK = getWMIC();
@@ -1316,7 +1321,7 @@ function vcpStr(code) {
     return `0x${parseInt(code).toString(16).toUpperCase()}`
 }
 
-testDDCCIMethods = async () => {
+async function testDDCCIMethods() {
     let fastIsFine = false
     try {
         if(skipTest) {
