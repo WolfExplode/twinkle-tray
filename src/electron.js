@@ -1733,7 +1733,7 @@ async function getThemeRegistry() {
     const key = reg.openKey(reg.HKCU, 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StuckRects3', reg.Access.ALL_ACCESS);
 
     const Settings = reg.getValue(key, null, 'Settings');
-    taskbarPos = Settings[12] * 1
+    const taskbarPos = Settings[12] * 1
     detectedTaskbarHeight = Settings[20] * 1
     detectedTaskbarHide = (parseInt(Settings[8]) & 1  ? true : false) // 3 = auto-hide
 
