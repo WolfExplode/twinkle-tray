@@ -2275,7 +2275,10 @@ ipcMain.on('open-url', (event, url) => {
 })
 
 ipcMain.on('get-update', (event, version) => {
-  store.get("updates").latestVersion.error = false
+  // latestVersion is `false` until an update is found; clearing a flag on it is
+  // a no-op in that case (and would throw under strict mode).
+  const latestVersion = store.get("updates").latestVersion
+  if (latestVersion) latestVersion.error = false
   getLatestUpdate(version)
 })
 
@@ -3527,7 +3530,7 @@ const getLatestUpdate = async (version) => {
     logger.debug("Downloading update from: " + version.downloadURL)
     const fs = require('fs');
 
-    latestVersion.downloading = true
+    if (latestVersion) latestVersion.downloading = true
     broadcastLatestVersion()
 
     // Remove old update
@@ -3581,8 +3584,10 @@ const getLatestUpdate = async (version) => {
 
   } catch (e) {
     logger.debug("Couldn't download update!", e)
-    latestVersion.show = true
-    latestVersion.downloading = false
+    if (latestVersion) {
+      latestVersion.show = true
+      latestVersion.downloading = false
+    }
     broadcastLatestVersion()
   }
 }
@@ -3627,27 +3632,32 @@ function runUpdate(expectedSize = false) {
   } catch (e) {
     logger.debug(e)
     const latestVersion = store.get("updates").latestVersion
-    latestVersion.show = true
-    latestVersion.error = true
+    if (latestVersion) {
+      latestVersion.show = true
+      latestVersion.error = true
+    }
     broadcastLatestVersion()
   }
 
 }
 
 ipcMain.on('check-for-updates', () => {
-  store.get("updates").latestVersion.error = false
+  const latestVersion = store.get("updates").latestVersion
+  if (latestVersion) latestVersion.error = false
   broadcastLatestVersion()
   checkForUpdates(true)
 })
 
 ipcMain.on('ignore-update', (event, dismissedUpdate) => {
   writeSettings({ dismissedUpdate })
-  store.get("updates").latestVersion.show = false
+  const latestVersion = store.get("updates").latestVersion
+  if (latestVersion) latestVersion.show = false
   broadcastLatestVersion()
 })
 
 ipcMain.on('clear-update', (event, dismissedUpdate) => {
-  store.get("updates").latestVersion.show = false
+  const latestVersion = store.get("updates").latestVersion
+  if (latestVersion) latestVersion.show = false
   broadcastLatestVersion()
 })
 
