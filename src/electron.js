@@ -3214,25 +3214,9 @@ function toggleTimeAdjustments() {
 function setTrayStatus() {
   try {
     if (tray) {
-      let averagePerc = 0
-      let i = 0
-      for (let key in monitors) {
-        if (monitors[key].type === "ddcci" || monitors[key].type === "wmi") {
-          i++
-          const dim = monitors[key].softwareDim ?? 0
-          averagePerc += (dim > 0 && monitors[key].brightness === 0) ? -dim : monitors[key].brightness
-        }
-      }
-      let tooltip = 'Twinkle Tray' + (isDev ? " (Dev)" : "")
       const kelvin = getCurrentKelvin()
       const showKelvin = (store.get("color").manualTemperatureActive || settings.adjustmentTimeTemperatureEnabled) && kelvin < 6500
-      if (i > 0) {
-        averagePerc = Math.floor(averagePerc / i)
-        tooltip += ' (' + averagePerc + '%' + (showKelvin ? ', ' + kelvin + 'K' : '') + ')'
-      } else if (showKelvin) {
-        tooltip += ' (' + kelvin + 'K)'
-      }
-      tray.setToolTip(tooltip)
+      tray.setToolTip(Utils.buildTrayTooltip(monitors, { isDev, kelvin, showKelvin }))
     }
   } catch (e) {
     logger.debug(e)

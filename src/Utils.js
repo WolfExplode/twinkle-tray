@@ -238,7 +238,8 @@ Flag to show brightness levels in the panel
     parseWMIString,
     isInternalURL,
     parseTaskbarRegistry,
-    buildAccentPalette
+    buildAccentPalette,
+    buildTrayTooltip
 }
 
 
@@ -638,6 +639,31 @@ function parseTaskbarRegistry(settingsBytes = []) {
         height: settingsBytes[20] * 1,
         autoHide: (parseInt(settingsBytes[8]) & 1 ? true : false)
     }
+}
+
+// Build the tray tooltip string: app name plus, when any DDC/CI or WMI display
+// is present, the floored average brightness across them, optionally with the
+// colour temperature. A software-dimmed display sitting at 0 hardware brightness
+// counts as its negative dim level, so the average can read below zero (matching
+// how the panel shows sub-zero dimming).
+function buildTrayTooltip(monitors = {}, { isDev = false, kelvin = 6500, showKelvin = false } = {}) {
+    let averagePerc = 0
+    let i = 0
+    for (let key in monitors) {
+        if (monitors[key].type === "ddcci" || monitors[key].type === "wmi") {
+            i++
+            const dim = monitors[key].softwareDim ?? 0
+            averagePerc += (dim > 0 && monitors[key].brightness === 0) ? -dim : monitors[key].brightness
+        }
+    }
+    let tooltip = 'Twinkle Tray' + (isDev ? " (Dev)" : "")
+    if (i > 0) {
+        averagePerc = Math.floor(averagePerc / i)
+        tooltip += ' (' + averagePerc + '%' + (showKelvin ? ', ' + kelvin + 'K' : '') + ')'
+    } else if (showKelvin) {
+        tooltip += ' (' + kelvin + 'K)'
+    }
+    return tooltip
 }
 
 // Build the app's accent colour palette (old, luminance-clamped format) from a

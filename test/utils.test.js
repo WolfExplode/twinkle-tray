@@ -391,3 +391,30 @@ test('buildAccentPalette leaves a mid-lightness accent unclamped and returns all
   }
   assert.match(palette.transparent, /^rgb/)
 })
+
+test('buildTrayTooltip shows the floored average brightness of ddcci/wmi displays', () => {
+  const monitors = {
+    a: { type: 'ddcci', brightness: 50 },
+    b: { type: 'wmi', brightness: 75 },
+    c: { type: 'none', brightness: 0 } // ignored
+  }
+  assert.strictEqual(Utils.buildTrayTooltip(monitors, {}), 'Twinkle Tray (62%)') // floor(125/2)
+})
+
+test('buildTrayTooltip counts a 0-brightness software-dimmed display as negative', () => {
+  const monitors = { a: { type: 'ddcci', brightness: 0, softwareDim: 30 } }
+  assert.strictEqual(Utils.buildTrayTooltip(monitors, {}), 'Twinkle Tray (-30%)')
+})
+
+test('buildTrayTooltip appends kelvin when showKelvin and has no displays', () => {
+  assert.strictEqual(Utils.buildTrayTooltip({}, { showKelvin: true, kelvin: 4000 }), 'Twinkle Tray (4000K)')
+  assert.strictEqual(Utils.buildTrayTooltip({}, { showKelvin: false, kelvin: 4000 }), 'Twinkle Tray')
+})
+
+test('buildTrayTooltip combines brightness and kelvin, and honours the dev suffix', () => {
+  const monitors = { a: { type: 'ddcci', brightness: 80 } }
+  assert.strictEqual(
+    Utils.buildTrayTooltip(monitors, { isDev: true, showKelvin: true, kelvin: 3500 }),
+    'Twinkle Tray (Dev) (80%, 3500K)'
+  )
+})
