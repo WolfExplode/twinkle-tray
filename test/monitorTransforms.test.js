@@ -1,6 +1,6 @@
 const { test } = require('node:test')
 const assert = require('node:assert')
-const { applyOrder, applyRemap, applyRemaps, shouldSkipDisplay } = require('../src/monitorTransforms')
+const { applyOrder, applyRemap, applyRemaps, shouldSkipDisplay, pairDisplaysToMonitors } = require('../src/monitorTransforms')
 
 test('applyOrder sets monitor.order from matching id entries', () => {
   const monitors = {
@@ -89,4 +89,52 @@ test('shouldSkipDisplay returns false when hwid is not in any rule list', () => 
 
 test('shouldSkipDisplay returns false for a monitor with no hwid', () => {
   assert.strictEqual(shouldSkipDisplay({ id: 'x' }, ['DEL41D9'], []), false)
+})
+
+test('pairDisplaysToMonitors zips displays and tray monitors left-to-right', () => {
+  const displays = [
+    { id: 'd-right', bounds: { x: 1920, y: 0 } },
+    { id: 'd-left', bounds: { x: 0, y: 0 } }
+  ]
+  const monitors = {
+    b: { id: 'MON_RIGHT', bounds: { position: { x: 1920, y: 0 } } },
+    a: { id: 'MON_LEFT', bounds: { position: { x: 0, y: 0 } } }
+  }
+  const pairs = pairDisplaysToMonitors(displays, monitors)
+  assert.strictEqual(pairs.length, 2)
+  assert.strictEqual(pairs[0].display.id, 'd-left')
+  assert.strictEqual(pairs[0].monitor.id, 'MON_LEFT')
+  assert.strictEqual(pairs[1].display.id, 'd-right')
+  assert.strictEqual(pairs[1].monitor.id, 'MON_RIGHT')
+})
+
+test('pairDisplaysToMonitors ignores monitors without bounds.position', () => {
+  const displays = [{ id: 'd', bounds: { x: 0, y: 0 } }]
+  const monitors = { a: { id: 'MON', bounds: {} } }
+  const pairs = pairDisplaysToMonitors(displays, monitors)
+  assert.strictEqual(pairs[0].monitor, undefined)
+})
+
+test('pairDisplaysToMonitors leaves extra displays with undefined monitor', () => {
+  const displays = [
+    { id: 'd1', bounds: { x: 0, y: 0 } },
+    { id: 'd2', bounds: { x: 1000, y: 0 } }
+  ]
+  const monitors = { a: { id: 'MON', bounds: { position: { x: 0, y: 0 } } } }
+  const pairs = pairDisplaysToMonitors(displays, monitors)
+  assert.strictEqual(pairs[0].monitor.id, 'MON')
+  assert.strictEqual(pairs[1].monitor, undefined)
+})
+
+test('pairDisplaysToMonitors does not mutate the input displays array', () => {
+  const displays = [
+    { id: 'd-right', bounds: { x: 1920, y: 0 } },
+    { id: 'd-left', bounds: { x: 0, y: 0 } }
+  ]
+  pairDisplaysToMonitors(displays, {})
+  assert.strictEqual(displays[0].id, 'd-right', 'original order preserved')
+})
+
+test('pairDisplaysToMonitors with no args is a safe empty result', () => {
+  assert.deepStrictEqual(pairDisplaysToMonitors(), [])
 })

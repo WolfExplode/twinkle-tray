@@ -5,7 +5,9 @@ const {
   toNowValue,
   getCurrentAdjustmentEvent,
   getNextAdjustmentEvent,
-  getCurrentAdjustmentEventLERP
+  getCurrentAdjustmentEventLERP,
+  getSunCalcTime,
+  getScheduledColorForMonitor
 } = require('../src/adjustmentTimes')
 
 // Helper: build a simple linked-display event.
@@ -149,4 +151,54 @@ test('sun-relative events resolve via the injected getSunCalcTime', () => {
   assert.strictEqual(getCurrentAdjustmentEvent(sched, at(21), resolver).value, at(20))
   // Overnight wrap still works for sun-relative schedules.
   assert.strictEqual(getCurrentAdjustmentEvent(sched, at(3), resolver).value, at(20))
+})
+
+test('getSunCalcTime formats injected SunCalc result as zero-padded H:MM', () => {
+  const fakeSunCalc = {
+    getTimes(date, lat, lon) {
+      assert.strictEqual(lat, 51.5)
+      assert.strictEqual(lon, -0.12)
+      return { solarNoon: new Date(2020, 0, 1, 12, 5) }
+    }
+  }
+  assert.strictEqual(getSunCalcTime(fakeSunCalc, 51.5, -0.12, "solarNoon"), "12:05")
+})
+
+test('getSunCalcTime passes the event sunCalc name through', () => {
+  const fakeSunCalc = {
+    getTimes: () => ({ sunset: new Date(2020, 0, 1, 9, 0), solarNoon: new Date(2020, 0, 1, 12, 0) })
+  }
+  assert.strictEqual(getSunCalcTime(fakeSunCalc, 0, 0, "sunset"), "9:00")
+})
+
+test('getScheduledColorForMonitor returns {} with no event', () => {
+  assert.deepStrictEqual(getScheduledColorForMonitor({ id: 'A' }, false, {}), {})
+})
+
+test('getScheduledColorForMonitor returns {} when features disabled', () => {
+  const event = { kelvin: 4000, highlightWeight: 10 }
+  assert.deepStrictEqual(getScheduledColorForMonitor({ id: 'A' }, event, {}), {})
+})
+
+test('getScheduledColorForMonitor uses event defaults when enabled', () => {
+  const event = {}
+  const settings = { adjustmentTimeTemperatureEnabled: true, adjustmentTimeHighlightCompressionEnabled: true }
+  assert.deepStrictEqual(getScheduledColorForMonitor({ id: 'A' }, event, settings), { kelvin: 6500, highlightWeight: 0 })
+})
+
+test('getScheduledColorForMonitor honours per-display overrides', () => {
+  const event = {
+    kelvin: 5000,
+    highlightWeight: 5,
+    monitorsKelvin: { A: 3500 },
+    monitorsHighlightWeight: { A: 40 }
+  }
+  const settings = {
+    adjustmentTimeTemperatureEnabled: true,
+    adjustmentTimeHighlightCompressionEnabled: true,
+    adjustmentTimeIndividualDisplays: true
+  }
+  assert.deepStrictEqual(getScheduledColorForMonitor({ id: 'A' }, event, settings), { kelvin: 3500, highlightWeight: 40 })
+  // A monitor without an override falls back to the event-wide value.
+  assert.deepStrictEqual(getScheduledColorForMonitor({ id: 'B' }, event, settings), { kelvin: 5000, highlightWeight: 5 })
 })

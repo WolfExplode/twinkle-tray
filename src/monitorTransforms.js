@@ -56,4 +56,20 @@ function shouldSkipDisplay(monitorOrHwid, skipRules = [], userSkipRules = []) {
   return rules.includes(hwid1)
 }
 
-module.exports = { applyOrder, applyRemap, applyRemaps, shouldSkipDisplay }
+// Pair Electron displays to tray monitors by on-screen position.
+//
+// Both lists are sorted left-to-right, top-to-bottom and zipped by index:
+// `displays` by `bounds.{x,y}` (the Electron `screen` shape) and the tray
+// `monitors` by `bounds.position.{x,y}`. Only monitors that carry a
+// `bounds.position` participate. Returns an array aligned to the sorted
+// displays, each entry `{ display, monitor }` (monitor may be undefined when
+// there are more displays than positioned tray monitors).
+function pairDisplaysToMonitors(displays = [], monitors = {}) {
+  const sortedDisplays = [...displays].sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
+  const trayMonitors = Object.values(monitors || {})
+    .filter(m => m.bounds?.position !== undefined)
+    .sort((a, b) => a.bounds.position.x - b.bounds.position.x || a.bounds.position.y - b.bounds.position.y)
+  return sortedDisplays.map((display, i) => ({ display, monitor: trayMonitors[i] }))
+}
+
+module.exports = { applyOrder, applyRemap, applyRemaps, shouldSkipDisplay, pairDisplaysToMonitors }

@@ -235,7 +235,8 @@ Flag to show brightness levels in the panel
     vcpStr,
     determineTheme,
     readInstanceName,
-    parseWMIString
+    parseWMIString,
+    isInternalURL
 }
 
 
@@ -581,6 +582,12 @@ function minMax(value, min = 0, max = 100) {
 // Format a VCP code as an uppercase "0x.." string (e.g. 18 -> "0x12").
 function vcpStr(code) {
     return `0x${parseInt(code).toString(16).toUpperCase()}`
+}
+
+// True for URLs the app renders itself (local dev server or bundled file://).
+// Anything else is treated as external and opened in the user's browser.
+function isInternalURL(url) {
+    return typeof url === "string" && (url.startsWith("http://localhost:3000") || url.startsWith("file://"))
 }
 
 // Split a Windows monitor InstanceName into its backslash-separated hwid parts,

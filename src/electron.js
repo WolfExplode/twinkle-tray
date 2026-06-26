@@ -20,6 +20,8 @@ const isPortable = (app.name == "twinkle-tray-portable" ? true : false)
 const Utils = require("./Utils")
 const AdjustmentTimes = require("./adjustmentTimes")
 const { createMonitorFocusController } = require("./monitorFocusController")
+const { createAnalytics } = require("./analytics")
+const { createPanelAnimator } = require("./panelAnimator")
 const MonitorTransforms = require("./monitorTransforms")
 const Profiles = require("./profiles")
 const UpdateCheck = require("./updateCheck")
@@ -408,35 +410,6 @@ function willPauseMouseEvents(time = 10000) {
 
 
 
-// Analytics
-let analyticsInterval = false
-let analyticsFrequency = 1000 * 60 * 29 // 29 minutes
-let lastAnalyticsPing = 0
-
-function pingAnalytics() {
-  // Skip if too recent
-  if (Date.now() < lastAnalyticsPing + (1000 * 60 * 28)) return false;
-
-  const analytics = require('ga4-mp').createClient("Y1YTliQdTL-moveI0z1TLA", "G-BQ22ZK4BPY", settings.uuid)
-  logger.debug("\x1b[34mAnalytics:\x1b[0m sending with UUID " + settings.uuid)
-
-  let events = []
-  events.push({
-    name: "page_view",
-    params: {
-      page_location: app.name + "/" + "v" + appVersion + "/" + (appBuild ? appBuild : ""),
-      page_title: app.name + "/" + "v" + appVersion,
-      page_referrer: app.name,
-      os_version: require("os").release(),
-      app_type: app.name,
-      app_version: appVersion,
-      engagement_time_msec: 1
-    }
-  })
-  analytics.send(events)
-  lastAnalyticsPing = Date.now()
-}
-
 // monitors slice (store-owned). `monitors` aliases the slice's stable map of
 // monitor objects (mutated in place; the one wholesale refresh replaces its
 // contents in place). lastKnownDisplays is a reassigned value read/written
@@ -594,6 +567,8 @@ const tempSettings = {
 // store.update so the store stays the single source of truth.
 store.update("settings", Object.assign({}, defaultSettings))
 const settings = store.get("settings")
+
+const analytics = createAnalytics({ settings, logger, appName: app.name, appVersion, appBuild })
 
 function readSettings(doProcessSettings = true) {
   try {
@@ -901,16 +876,9 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     }
 
     if (settings.analytics) {
-      pingAnalytics()
-      if (analyticsInterval) {
-        clearInterval(analyticsInterval)
-      }
-      analyticsInterval = setInterval(pingAnalytics, analyticsFrequency)
+      analytics.start()
     } else {
-      analytics = false
-      if (analyticsInterval) {
-        clearInterval(analyticsInterval)
-      }
+      analytics.stop()
     }
 
     if (rebuildTray) {
@@ -1421,19 +1389,15 @@ store.subscribe("monitors", (diff) => {
 // every other URL is blocked and handed to the OS browser instead. New-window
 // requests are always denied, with external URLs likewise routed to the OS browser.
 
-function isInternalURL(url) {
-  return typeof url === "string" && (url.startsWith("http://localhost:3000") || url.startsWith("file://"))
-}
-
 function applyNavigationGuards(win) {
   const { shell } = require('electron')
   win.webContents.on('will-navigate', (e, url) => {
-    if (isInternalURL(url)) return;
+    if (Utils.isInternalURL(url)) return;
     e.preventDefault()
     shell.openExternal(url)
   })
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (!isInternalURL(url)) shell.openExternal(url)
+    if (!Utils.isInternalURL(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
 }
@@ -1448,16 +1412,9 @@ store.update("color", { softwareDimLevels: {} })
 const softwareDimLevels = store.get("color").softwareDimLevels
 
 function getSoftwareDimDisplayBounds(monitorId) {
-  const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
-  const trayMonitors = Object.values(monitors || {})
-    .filter(m => m.bounds?.position !== undefined)
-    .sort((a, b) => a.bounds.position.x - b.bounds.position.x || a.bounds.position.y - b.bounds.position.y)
-  for (let i = 0; i < displays.length; i++) {
-    if (trayMonitors[i] && trayMonitors[i].id === monitorId) {
-      return displays[i].bounds
-    }
-  }
-  return null
+  const pair = MonitorTransforms.pairDisplaysToMonitors(screen.getAllDisplays(), monitors)
+    .find(p => p.monitor?.id === monitorId)
+  return pair ? pair.display.bounds : null
 }
 
 function updateSoftwareDim(monitorId, level) {
@@ -1551,16 +1508,9 @@ const manualWarmthLevels = store.get("color").manualWarmthLevels
 const manualHighlightLevels = store.get("color").manualHighlightLevels
 
 function getMonitorDisplayIndex(monitorId) {
-  const displays = screen.getAllDisplays().sort((a, b) => a.bounds.x - b.bounds.x || a.bounds.y - b.bounds.y)
-  const trayMonitors = Object.values(monitors || {})
-    .filter(m => m.bounds?.position !== undefined)
-    .sort((a, b) => a.bounds.position.x - b.bounds.position.x || a.bounds.position.y - b.bounds.position.y)
-  for (let i = 0; i < displays.length; i++) {
-    if (trayMonitors[i] && trayMonitors[i].id === monitorId) {
-      return i
-    }
-  }
-  return null
+  const index = MonitorTransforms.pairDisplaysToMonitors(screen.getAllDisplays(), monitors)
+    .findIndex(p => p.monitor?.id === monitorId)
+  return index === -1 ? null : index
 }
 
 function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
@@ -1624,26 +1574,7 @@ function showDisplayColorEffects() {
 }
 
 function getScheduledColorForMonitor(monitor, foundEvent) {
-  const updates = {}
-  if (!foundEvent) return updates
-
-  if (settings.adjustmentTimeTemperatureEnabled) {
-    let kelvin = foundEvent.kelvin ?? 6500
-    if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsKelvin?.[monitor.id] != null) {
-      kelvin = foundEvent.monitorsKelvin[monitor.id]
-    }
-    updates.kelvin = kelvin
-  }
-
-  if (settings.adjustmentTimeHighlightCompressionEnabled) {
-    let highlight = foundEvent.highlightWeight ?? 0
-    if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsHighlightWeight?.[monitor.id] != null) {
-      highlight = foundEvent.monitorsHighlightWeight[monitor.id]
-    }
-    updates.highlightWeight = highlight
-  }
-
-  return updates
+  return AdjustmentTimes.getScheduledColorForMonitor(monitor, foundEvent, settings)
 }
 
 function applyCurrentDisplayColorEffects(overrideManual = true) {
@@ -2522,7 +2453,7 @@ ipcMain.on('panel-height', (event, height) => {
   if (store.get("panel").panelState === "overlay") return;
   panelSize.height = height + (settings?.isWin11 ? 24 : 0)
   panelSize.width = 392 + (settings?.isWin11 ? 24 : 0)
-  if (panelSize.visible && !isAnimatingPanel) {
+  if (panelSize.visible && !panelAnim.isAnimating()) {
     repositionPanel()
   }
 })
@@ -2940,7 +2871,7 @@ function repositionPanel() {
     panelSize.taskbar = taskbar
     sendToAllWindows('taskbar', taskbar)
 
-    if (mainWindow && !isAnimatingPanel) {
+    if (mainWindow && !panelAnim.isAnimating()) {
       // Check if taskbar is actually taking up space on the primary display.
       // This handles per-monitor auto-hide mods (e.g., Windhawk) where the global
       // auto-hide registry setting doesn't reflect the actual state on each monitor.
@@ -3108,18 +3039,18 @@ function getMainWindowHandle() {
 
 
 
-let panelAnimationInterval = false
-let shouldAnimatePanel = false
-let isAnimatingPanel = false
-let panelHeight = 0
-let panelMaxHeight = 80
-let panelTransitionTime = 0.35
-let currentPanelTime = 0
-let startPanelTime = process.hrtime.bigint()
-let lastPanelTime = process.hrtime.bigint()
-let primaryRefreshRate = 59.97
-let primaryDPI = 1
-let mainWindowHandle
+// The panel open animation (timed LERP loop + its state) lives in
+// ./panelAnimator.js. showPanel computes the per-run geometry and hands it to
+// panelAnim.start(); the hide path calls panelAnim.stop().
+const panelAnim = createPanelAnimator({
+  getMainWindow: () => mainWindow,
+  settings,
+  panelSize,
+  Utils,
+  refreshCtx,
+  setWindowPos,
+  repositionPanel
+})
 
 // Set brightness panel state (visible or not)
 function showPanel(show = true, height = 300) {
@@ -3130,14 +3061,14 @@ function showPanel(show = true, height = 300) {
     if (startHideTimeout) clearTimeout(startHideTimeout); // Reset "hide" timeout
     startHideTimeout = null
     mainWindow.restore()
-    mainWindowHandle = mainWindow.getNativeWindowHandle().readInt32LE(0)
+    let mainWindowHandle = mainWindow.getNativeWindowHandle().readInt32LE(0)
     repositionPanel()
-    panelHeight = height
+    let panelHeight = height
     panelSize.visible = true
 
     panelSize.bounds = screen.dipToScreenRect(mainWindow, mainWindow.getBounds())
     panelSize.bounds = mainWindow.getBounds()
-    primaryDPI = screen.getPrimaryDisplay().scaleFactor
+    let primaryDPI = screen.getPrimaryDisplay().scaleFactor
     panelHeight = panelHeight * primaryDPI
 
     if (settings.useNativeAnimation && settings.useAcrylic && lastTheme.EnableTransparency) {
@@ -3147,7 +3078,7 @@ function showPanel(show = true, height = 300) {
       } else {
         tryVibrancy(mainWindow, { theme: (lastTheme && lastTheme.SystemUsesLightTheme ? (settings.useAcrylic ? "#DBDBDBDD" : "#DBDBDB70") : (settings.useAcrylic ? "#292929DD" : "#29292970")), effect: (settings.useAcrylic ? "acrylic" : "blur") })
       }
-      startPanelAnimation()
+      panelAnim.start({ panelHeight, primaryDPI, mainWindowHandle })
     } else {
       // No blur, or CSS Animation
       if (settings.useAcrylic) {
@@ -3185,10 +3116,7 @@ function showPanel(show = true, height = 300) {
     // Hide panel
     setAlwaysOnTop(false)
     panelSize.visible = false
-    clearInterval(panelAnimationInterval)
-    panelAnimationInterval = false
-    shouldAnimatePanel = false
-    isAnimatingPanel = false
+    panelAnim.stop()
     sendToAllWindows("display-mode", "normal")
     store.update("panel", { panelState: "hidden" })
     sendToAllWindows("closePanelAnimation")
@@ -3225,97 +3153,6 @@ function startHidePanel() {
   }
 }
 
-// Begins panel opening animation
-async function startPanelAnimation() {
-  if (!shouldAnimatePanel) {
-
-    // Set to animating
-    shouldAnimatePanel = true
-    isAnimatingPanel = true
-
-    // Reset timing variables
-    startPanelTime = process.hrtime.bigint()
-    currentPanelTime = -1
-
-    // Get refresh rate of primary display
-    // This allows the animation to play no more than the refresh rate
-    primaryRefreshRate = await refreshCtx.findVerticalRefreshRateForDisplayPoint(0, 0)
-
-    // Start animation interval after a short delay
-    // This avoids jank from React updating the DOM
-    if (!panelAnimationInterval)
-      setTimeout(() => {
-        if (!panelAnimationInterval)
-          panelAnimationInterval = setTimeout(doAnimationStep, 1000 / 600)
-      }, 100)
-  }
-}
-
-// Borrowed some of this animation logic from @djsweet
-function hrtimeDeltaForFrequency(freq) {
-  return BigInt(Math.ceil(1000000000 / freq));
-}
-let busy = false
-function doAnimationStep() {
-
-  // If animation has been requested to stop, kill it
-  if (!isAnimatingPanel) {
-    clearInterval(panelAnimationInterval)
-    panelAnimationInterval = false
-    shouldAnimatePanel = false
-    return false
-  }
-
-  if (currentPanelTime === -1) {
-    startPanelTime = process.hrtime.bigint()
-    currentPanelTime = 0
-  }
-  // Limit updates to specific interval
-
-  const now = process.hrtime.bigint()
-  if (!busy && now > lastPanelTime + hrtimeDeltaForFrequency(primaryRefreshRate * (settings.useAcrylic ? 1 : 2) || 59.97)) {
-
-    lastPanelTime = now
-    currentPanelTime = Number(Number(now - startPanelTime) / 1000000000)
-
-    // Check if at end of animation
-    if (currentPanelTime >= panelTransitionTime) {
-      // Stop animation
-      isAnimatingPanel = false
-      shouldAnimatePanel = false
-      // Stop at 100%
-      currentPanelTime = panelTransitionTime
-      clearInterval(panelAnimationInterval)
-      panelAnimationInterval = false
-    }
-
-    // LERP height and opacity
-    let calculatedHeight = panelHeight - (panelMaxHeight * primaryDPI) + Math.round(Utils.easeOutQuad(currentPanelTime / panelTransitionTime) * (panelMaxHeight * primaryDPI))
-    let calculatedOpacity = (Math.round(Math.min(1, currentPanelTime / (panelTransitionTime / 6)) * 100) / 100)
-
-    // Apply panel size
-
-    busy = true
-    if (panelSize.taskbar.position === "TOP") {
-      // Top
-      setWindowPos(mainWindowHandle, -2, panelSize.bounds.x * primaryDPI, ((panelSize.base) * primaryDPI), panelSize.bounds.width * primaryDPI, calculatedHeight, 0x0400)
-    } else {
-      // Bottom, left, right
-      setWindowPos(mainWindowHandle, -2, panelSize.bounds.x * primaryDPI, ((panelSize.base) * primaryDPI) + (panelHeight - calculatedHeight), panelSize.bounds.width * primaryDPI, calculatedHeight + (6 * primaryDPI * (settings.useAcrylic ? 0 : 1)), 0x0400)
-    }
-
-    // Stop opacity updates if at 1 already
-    if (mainWindow.getOpacity() < 1)
-      mainWindow.setOpacity(calculatedOpacity)
-    busy = false
-  }
-
-  if (isAnimatingPanel) {
-    panelAnimationInterval = setTimeout(doAnimationStep, 1000 / (primaryRefreshRate * (settings.useAcrylic ? 1 : 2) || 59.97))
-  } else {
-    repositionPanel()
-  }
-}
 
 
 
@@ -4505,9 +4342,7 @@ function getCurrentAdjustmentEventLERP() {
 }
 
 function getSunCalcTime(timeName = "solarNoon") {
-  const localTimes = SunCalc.getTimes(new Date(), settings.adjustmentTimeLatitude, settings.adjustmentTimeLongitude)
-  const time = new Date(localTimes[timeName])
-  return `${time.getHours()}:${time.getMinutes().toString().padStart(2, '0')}`
+  return AdjustmentTimes.getSunCalcTime(SunCalc, settings.adjustmentTimeLatitude, settings.adjustmentTimeLongitude, timeName)
 }
 
 // If applicable, apply the current Time of Day Adjustment

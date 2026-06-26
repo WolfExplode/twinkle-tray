@@ -333,3 +333,15 @@ test('processArgs --vcp requires a code:value colon', () => {
   // wrongly accepted it.)
   assert.strictEqual(Utils.processArgs(["--vcp=0xD6"]).VCP, undefined)
 })
+
+test('isInternalURL accepts localhost dev server and file:// URLs', () => {
+  assert.strictEqual(Utils.isInternalURL("http://localhost:3000/index.html"), true)
+  assert.strictEqual(Utils.isInternalURL("file:///C:/app/index.html"), true)
+})
+
+test('isInternalURL rejects external URLs and non-strings', () => {
+  assert.strictEqual(Utils.isInternalURL("https://twinkletray.com"), false)
+  assert.strictEqual(Utils.isInternalURL("http://localhost:9999"), false)
+  assert.strictEqual(Utils.isInternalURL(undefined), false)
+  assert.strictEqual(Utils.isInternalURL(null), false)
+})

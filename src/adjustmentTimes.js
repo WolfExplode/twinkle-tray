@@ -1,10 +1,12 @@
 // Pure logic for "Time of Day Adjustments" (scheduled brightness/color events).
 //
 // Extracted from electron.js so it can be unit tested without the Electron runtime.
-// Every function is pure: it takes the event list and the current time-of-day (in
-// minutes since midnight) as input and returns a result. No module globals, no Date,
-// no side effects. The Electron side passes `settings.adjustmentTimes`, the current
-// minute-of-day, and a `getSunCalcTime` resolver for sun-relative events.
+// Every function is dependency-free: it takes the event list and the current
+// time-of-day (in minutes since midnight) as input and returns a result. No module
+// globals, no side effects. Anything ambient (SunCalc, the current Date) is injected
+// as a parameter so it stays testable. The Electron side passes
+// `settings.adjustmentTimes`, the current minute-of-day, and a `getSunCalcTime`
+// resolver for sun-relative events.
 
 const Utils = require('./Utils')
 
@@ -139,9 +141,47 @@ function getCurrentAdjustmentEventLERP(adjustmentTimes = [], nowValue = 0, indiv
   }
 }
 
+// Resolve a sun-relative time ("HH:MM") for an event's `sunCalc` name. SunCalc
+// and the date are injected so this stays testable; the Electron side passes the
+// real `suncalc` module plus the user's latitude/longitude.
+function getSunCalcTime(SunCalc, latitude, longitude, timeName = "solarNoon", date = new Date()) {
+  const localTimes = SunCalc.getTimes(date, latitude, longitude)
+  const time = new Date(localTimes[timeName])
+  return `${time.getHours()}:${time.getMinutes().toString().padStart(2, '0')}`
+}
+
+// Build the per-monitor color updates a scheduled event implies, honouring the
+// temperature/highlight enable flags and per-display overrides in `settings`.
+// Returns an object with `kelvin` and/or `highlightWeight`, or {} when the
+// feature is off or there is no event.
+function getScheduledColorForMonitor(monitor, foundEvent, settings = {}) {
+  const updates = {}
+  if (!foundEvent) return updates
+
+  if (settings.adjustmentTimeTemperatureEnabled) {
+    let kelvin = foundEvent.kelvin ?? 6500
+    if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsKelvin?.[monitor.id] != null) {
+      kelvin = foundEvent.monitorsKelvin[monitor.id]
+    }
+    updates.kelvin = kelvin
+  }
+
+  if (settings.adjustmentTimeHighlightCompressionEnabled) {
+    let highlight = foundEvent.highlightWeight ?? 0
+    if (settings.adjustmentTimeIndividualDisplays && foundEvent.monitorsHighlightWeight?.[monitor.id] != null) {
+      highlight = foundEvent.monitorsHighlightWeight[monitor.id]
+    }
+    updates.highlightWeight = highlight
+  }
+
+  return updates
+}
+
 module.exports = {
   toNowValue,
   getCurrentAdjustmentEvent,
   getNextAdjustmentEvent,
-  getCurrentAdjustmentEventLERP
+  getCurrentAdjustmentEventLERP,
+  getSunCalcTime,
+  getScheduledColorForMonitor
 }
