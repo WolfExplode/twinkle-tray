@@ -183,6 +183,7 @@
     "cross-env": "^7.0.3",
     "electron": "^39.2.6",
     "electron-builder": "26.3.2",
+    "jsdom": "^14.1.0",
     "node-addon-api": "^8.2.2",
     "node-gyp": "^12.1.0",
     "parcel-bundler": "^1.12.5",

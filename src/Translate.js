@@ -24,14 +24,14 @@ class Translate {
     getString(key, ...args) {
         if (this.localizationData[key] !== undefined && this.localizationData[key] !== "") {
             return this.makeTranslation(this.localizationData[key], args)
-        } else if (this.fallbackData[key] !== undefined & this.fallbackData[key] !== "") {
+        } else if (this.fallbackData[key] !== undefined && this.fallbackData[key] !== "") {
             return this.makeTranslation(this.fallbackData[key], args)
         } else {
             return ""
         }
     }
     getHTML(key, ...args) {
-        return this.getString(key, args)
+        return this.getString(key, ...args)
     }
 
 }

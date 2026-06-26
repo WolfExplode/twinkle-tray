@@ -111,7 +111,7 @@ module.exports = {
             }
 
             // DDC/CI command
-            if (arg.indexOf("--vcp=") === 0 && arg.indexOf(":")) {
+            if (arg.indexOf("--vcp=") === 0 && arg.includes(":")) {
                 validArgs.VCP = true
             }
 
@@ -138,8 +138,6 @@ module.exports = {
         if (args.ShowPanel) {
             console.log(`Showing panel`)
         } else if (args.List) {
-            //const displays = getKnownDisplays(knownDisplaysPath)
-
             const useUDP = (args.UseUDP ? true : false)
             const response = await (useUDP ? udpSendCommand : pipeSendCommand)("list", false, settings.udpPortActive, settings.udpKey)
             let displays = {}
@@ -226,10 +224,22 @@ Flag to show brightness levels in the panel
         0x62: "volume"
     },
     upgradeAdjustmentTimes,
+    migrateSettings,
     getVersionValue,
     lerp,
+    easeOutQuad,
     parseTime,
-    getCalibratedValue
+    getCalibratedValue,
+    normalizeBrightness,
+    minMax,
+    vcpStr,
+    determineTheme,
+    readInstanceName,
+    parseWMIString,
+    isInternalURL,
+    parseTaskbarRegistry,
+    buildAccentPalette,
+    buildTrayTooltip
 }
 
 
@@ -244,7 +254,7 @@ function upgradeAdjustmentTimes(times = []) {
 
         const newTime = {
             brightness: (time.brightness ? time.brightness : 50),
-            monitors: (time.monitors ? time.monitors : 50),
+            monitors: (time.monitors ? time.monitors : {}),
             time: "00:00"
         }
 
@@ -260,6 +270,194 @@ function upgradeAdjustmentTimes(times = []) {
 }
 
 // Convert version to a numeric value (v1.2.3 = 10020003)
+// Apply all version-guarded settings migrations in place, upgrading an
+// on-disk settings object to the current schema. Extracted verbatim from
+// electron.js readSettings() so the upgrade/downgrade paths can be unit tested.
+//
+// Mutates `settings` directly (preserving the original behaviour, including key
+// deletions). Side effects on other state are returned as flags rather than
+// performed here, keeping this a pure transform over `settings`:
+//   - resetKnownDisplays: caller should clear the monitors "lastKnownDisplays".
+//
+// Migrations are idempotent: this stamps settings.settingsVer (when ctx.appVersion
+// is given) so a re-run on already-migrated data is a no-op. The returned
+// `changed` flag reports whether anything was actually modified, so the caller
+// can persist immediately after a boot-time upgrade (and skip a needless rewrite
+// otherwise).
+//
+// ctx:
+//   appVersionValue : numeric value of the running app version (getVersionValue)
+//   appVersion      : version string to stamp as settingsVer (e.g. "1.17.2")
+//   appBuild        : build string to stamp as settingsBuild
+//   makeUuid        : () => string, used to mint ids during upgrades
+//   log             : (…args) => void, optional debug logger
+function migrateSettings(settings, ctx = {}) {
+    const { appVersionValue = 0, appVersion, appBuild, makeUuid = () => undefined, log = () => {} } = ctx
+    const result = { resetKnownDisplays: false, changed: false }
+    const before = JSON.stringify(settings)
+
+    if (settings.updateInterval === 999) settings.updateInterval = 100;
+
+    if (settings.monitorFocusTimeUnit === "seconds") {
+        settings.monitorFocusSeconds = settings.monitorFocusMinutes || 0
+        settings.monitorFocusMinutes = 0
+        delete settings.monitorFocusTimeUnit
+    } else if (settings.monitorFocusTimeUnit) {
+        delete settings.monitorFocusTimeUnit
+    }
+    if (settings.monitorFocusSeconds === undefined) settings.monitorFocusSeconds = 0
+
+    // Upgrade settings
+    const settingsVersion = getVersionValue(settings.settingsVer)
+    if (settingsVersion < getVersionValue("v1.15.0")) {
+        // v1.15.0
+        try {
+            // Upgrade adjustment times
+            const upgradedTimes = upgradeAdjustmentTimes(settings.adjustmentTimes)
+            settings.adjustmentTimes = upgradedTimes
+            log("Upgraded Adjustment Times to v1.15.0 format!")
+        } catch (e) {
+            log("Couldn't upgrade Adjustment Times", e)
+        }
+        try {
+            // Upgrade idle settings
+            if (settings.detectIdleTime) {
+                if (settings.detectIdleTime * 1 > 0) {
+                    settings.detectIdleTimeEnabled = true
+                    settings.detectIdleTimeSeconds = (settings.detectIdleTime * 1) % 60
+                    settings.detectIdleTimeMinutes = Math.floor((settings.detectIdleTime * 1) / 60)
+                }
+                delete settings.detectIdleTime
+            }
+            log("Upgraded Idle settings to v1.15.0 format!")
+        } catch (e) {
+            log("Couldn't upgrade Idle settings", e)
+        }
+    } else if (appVersionValue < getVersionValue("v1.16.0") && settingsVersion >= getVersionValue("v1.16.0")) {
+        // Downgrade from v1.16.0+
+        if (settings.hotkeysPre1160) {
+            settings.hotkeys = settings.hotkeysPre1160
+        } else {
+            settings.hotkeys = {}
+        }
+        log("Downgraded settings from v1.16.0+ format!")
+    }
+    if (settingsVersion < getVersionValue("v1.16.0")) {
+        // v1.16.0
+        result.resetKnownDisplays = true // Reset lastKnownDisplays due to known bug in earlier versions
+        try {
+            // Upgrade hotkeys
+            if (settings.hotkeys && Object.values(settings.hotkeys)?.length >= 0) {
+                settings.hotkeysPre1160 = settings.hotkeys // Save old hotkeys in case of downgrade
+
+                const newHotkeys = []
+                for (const hotkey of Object.values(settings.hotkeys)) {
+                    const newHotkey = {
+                        accelerator: hotkey.accelerator,
+                        id: makeUuid(),
+                        actions: [
+                            {
+                                monitors: {},
+                                target: "brightness",
+                                values: [0],
+                                value: 0,
+                                allMonitors: false
+                            }
+                        ]
+                    }
+                    if (hotkey.monitor === "turn_off_displays") {
+                        newHotkey.actions[0].type = "off"
+                    } else {
+                        newHotkey.monitors = {}
+                        if (hotkey.monitor === "all") {
+                            newHotkey.actions[0].allMonitors = true
+                        } else {
+                            newHotkey.actions[0].monitors[hotkey.monitor] = true
+                        }
+                        newHotkey.actions[0].type = "offset"
+                        newHotkey.actions[0].value = settings.hotkeyPercent * hotkey.direction
+                    }
+                    newHotkeys.push(newHotkey)
+                }
+                settings.hotkeys = newHotkeys
+            }
+            log(`Upgraded ${settings.hotkeys.length} hotkeys to v1.16.0 format!`)
+        } catch (e) {
+            log("Couldn't upgrade hotkeys", e)
+        }
+        try {
+            // Upgrade Adjustment Times for SunCalc
+            for (const time of settings.adjustmentTimes) {
+                time.useSunCalc = false
+                time.sunCalc = "sunrise"
+            }
+            log("Upgraded Adjustment Times to v1.16.0 format!")
+        } catch (e) {
+            log("Couldn't upgrade Adjustment Times", e)
+        }
+        try {
+            // Upgrade Monitor Features for v1.16.0
+            const newMonitorFeatures = {}
+            for (const monitorID in settings.monitorFeatures) {
+                newMonitorFeatures[monitorID] = {}
+                for (const featureName in settings.monitorFeatures[monitorID]) {
+                    if (featureName === "contrast") {
+                        newMonitorFeatures[monitorID]["0x12"] = settings.monitorFeatures[monitorID][featureName]
+                    } else if (featureName === "volume") {
+                        newMonitorFeatures[monitorID]["0x62"] = settings.monitorFeatures[monitorID][featureName]
+                    } else if (featureName === "powerState") {
+                        newMonitorFeatures[monitorID]["0xD6"] = settings.monitorFeatures[monitorID][featureName]
+                    }
+                }
+            }
+            settings.monitorFeatures = newMonitorFeatures
+            log("Upgraded Monitor Features to v1.16.0 format!")
+        } catch (e) {
+            log("Couldn't upgrade Monitor Features", e)
+        }
+        try {
+            // Remove disableOverlay
+            if (settings.disableOverlay === true) {
+                settings.defaultOverlayType = "disabled"
+            }
+            if (settings.disableOverlay !== undefined) {
+                delete settings.disableOverlay
+            }
+        } catch (e) {
+            log("Couldn't remove disableOverlay")
+        }
+    }
+
+    if (settingsVersion < getVersionValue("v1.16.1")) {
+        // Disable win32display-config events by default as of v1.16.1
+        // settings.useWin32Event = false
+    }
+
+    // Fix missing UUIDs for app profiles
+    if (settings.profiles?.length) {
+        for (const profile of settings.profiles) {
+            if (!profile.uuid) {
+                profile.uuid = makeUuid()
+            }
+        }
+    }
+
+    // Fix rawSettings bug
+    if (settings.rawSettings) delete settings.rawSettings;
+
+    // Remove hdrDisplays from v1.17.0-beta1
+    if (settings.settingsVer == "v1.17.0-beta1" || settingsVersion < getVersionValue("v1.16.8")) {
+        if (settings.hdrDisplays) delete settings.hdrDisplays;
+    }
+
+    // Stamp the current version so a future run is a no-op (idempotent).
+    if (appVersion !== undefined) settings.settingsVer = "v" + appVersion
+    if (appBuild !== undefined) settings.settingsBuild = appBuild
+
+    result.changed = JSON.stringify(settings) !== before
+    return result
+}
+
 function getVersionValue(version = 'v1.0.0') {
     let out = version.split('-')[0].replace("v", "").split(".")
     out = (out[0] * 10000 * 10000) + (out[1] * 10000) + (out[2] * 1)
@@ -268,6 +466,11 @@ function getVersionValue(version = 'v1.0.0') {
 
 function lerp(start, finish, perc) {
     return start * (1 - perc) + finish * perc
+}
+
+// Quintic ease-out: maps progress t (0..1) to an eased 0..1 value.
+function easeOutQuad(t) {
+    return 1 + (--t) * t * t * t * t
 }
 
 function parseTime(time) {
@@ -337,9 +540,10 @@ function getCalibratedValue(value, calibrationPoints = [], reverse = false) {
             const maxOutput = Math.max(p1.output, p2.output);
 
             if (value >= minOutput && value <= maxOutput) {
-                // Linear interpolation in reverse
+                // Flat segment (equal outputs) can't invert to one input; return the
+                // midpoint rather than dividing by zero (NaN). Reachable when the caller
+                // supplies explicit endpoints at input 0 and 100 with equal outputs.
                 if (p2.output === p1.output) {
-                    // If outputs are the same, return the midpoint input
                     return (p1.input + p2.input) / 2;
                 }
                 const ratio = (value - p1.output) / (p2.output - p1.output);
@@ -368,4 +572,133 @@ function getCalibratedValue(value, calibrationPoints = [], reverse = false) {
         // Fallback
         return value;
     }
+}
+
+// Clamp a value into the [min, max] range (defaults 0–100).
+function minMax(value, min = 0, max = 100) {
+    let out = value
+    if (value < min) out = min;
+    if (value > max) out = max;
+    return out;
+}
+
+// Format a VCP code as an uppercase "0x.." string (e.g. 18 -> "0x12").
+function vcpStr(code) {
+    return `0x${parseInt(code).toString(16).toUpperCase()}`
+}
+
+// True for URLs the app renders itself (local dev server or bundled file://).
+// Anything else is treated as external and opened in the user's browser.
+function isInternalURL(url) {
+    return typeof url === "string" && (url.startsWith("http://localhost:3000") || url.startsWith("file://"))
+}
+
+// Split a Windows monitor InstanceName into its backslash-separated hwid parts,
+// un-escaping the "&amp;" entities WMI returns. Returns undefined for no input.
+function readInstanceName(insName) {
+    return (insName ? insName.replace(/&amp;/g, '&').split("\\") : undefined)
+}
+
+// Decode the semicolon-separated decimal char codes WMI uses for strings
+// (e.g. UserFriendlyName, SerialNumberID) into a plain string. Zero entries are
+// remapped to 32 (space) to match the original behaviour. null passes through.
+function parseWMIString(str) {
+    if (str === null) return str;
+    let hexed = str.replace('{', '').replace('}', '').replace(/;0/g, ';32')
+    let decoded = '';
+    const split = hexed.split(';')
+    for (let i = 0; (i < split.length); i++)
+        decoded += String.fromCharCode(parseInt(split[i], 10));
+    decoded = decoded.trim()
+    return decoded;
+}
+
+// Resolve a theme setting ("dark"/"light"/anything else) to "dark" or "light".
+// An explicit dark/light wins; otherwise fall back to the last known system
+// theme (lastTheme.SystemUsesLightTheme), defaulting to dark.
+function determineTheme(themeName, lastTheme) {
+    const theme = themeName.toLowerCase()
+    if (theme === "dark" || theme === "light") return theme;
+    if (lastTheme && lastTheme.SystemUsesLightTheme) {
+        return "light"
+    } else {
+        return "dark"
+    }
+}
+
+// Parse the Explorer StuckRects3 "Settings" REG_BINARY blob into taskbar state.
+// Byte offsets are fixed by the Windows shell: [12] = docked edge
+// (0=LEFT, 1=TOP, 2=RIGHT, 3=BOTTOM), [20] = thickness in px, [8] low bit =
+// auto-hide. position is null when the edge byte isn't a known value, in which
+// case the caller keeps its previous reading.
+function parseTaskbarRegistry(settingsBytes = []) {
+    const edge = settingsBytes[12] * 1
+    const positions = { 0: "LEFT", 1: "TOP", 2: "RIGHT", 3: "BOTTOM" }
+    return {
+        position: positions[edge] ?? null,
+        height: settingsBytes[20] * 1,
+        autoHide: (parseInt(settingsBytes[8]) & 1 ? true : false)
+    }
+}
+
+// Build the tray tooltip string: app name plus, when any DDC/CI or WMI display
+// is present, the floored average brightness across them, optionally with the
+// colour temperature. A software-dimmed display sitting at 0 hardware brightness
+// counts as its negative dim level, so the average can read below zero (matching
+// how the panel shows sub-zero dimming).
+function buildTrayTooltip(monitors = {}, { isDev = false, kelvin = 6500, showKelvin = false } = {}) {
+    let averagePerc = 0
+    let i = 0
+    for (let key in monitors) {
+        if (monitors[key].type === "ddcci" || monitors[key].type === "wmi") {
+            i++
+            const dim = monitors[key].softwareDim ?? 0
+            averagePerc += (dim > 0 && monitors[key].brightness === 0) ? -dim : monitors[key].brightness
+        }
+    }
+    let tooltip = 'Twinkle Tray' + (isDev ? " (Dev)" : "")
+    if (i > 0) {
+        averagePerc = Math.floor(averagePerc / i)
+        tooltip += ' (' + averagePerc + '%' + (showKelvin ? ', ' + kelvin + 'K' : '') + ')'
+    } else if (showKelvin) {
+        tooltip += ' (' + kelvin + 'K)'
+    }
+    return tooltip
+}
+
+// Build the app's accent colour palette (old, luminance-clamped format) from a
+// 6-digit hex accent. The `color` package is injected so this stays free of a
+// hard dependency. The Windows accent can be near-black or near-white; clamp the
+// primary "accent" swatch into a usable 40-60% lightness band, then derive the
+// rest at fixed lightness steps.
+function buildAccentPalette(Color, accentHex) {
+    const accent = Color("#" + accentHex, "hex")
+    const matchLumi = (color, level) => {
+        let adjusted = color.hsl()
+        adjusted.color[2] = (level * 100)
+        return adjusted
+    }
+    let adjustedAccent = accent
+    if (accent.hsl().color[2] > 60) adjustedAccent = matchLumi(accent, 0.6);
+    if (accent.hsl().color[2] < 40) adjustedAccent = matchLumi(accent, 0.4);
+
+    return {
+        accent: adjustedAccent.hex(),
+        lighter: matchLumi(accent, 0.85).hex(),
+        light: matchLumi(accent, 0.52).hex(),
+        medium: matchLumi(accent, 0.48).hex(),
+        mediumDark: matchLumi(accent, 0.33).desaturate(0.1).hex(),
+        dark: matchLumi(accent, 0.275).desaturate(0.1).hex(),
+        transparent: matchLumi(accent, 0.275).desaturate(0.1).rgb().string(),
+    }
+}
+
+// Map a brightness value through min/max caps and any calibration points.
+// normalize = true when receiving from Monitors.js, false when sending to it.
+function normalizeBrightness(brightness, normalize = false, min = 0, max = 100, calibrationPoints = []) {
+    const points = calibrationPoints.slice()
+    if (min > 0) points.push({ input: 0, output: min })
+    if (max < 100) points.push({ input: 100, output: max })
+
+    return getCalibratedValue(brightness, points, normalize)
 }
