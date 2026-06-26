@@ -8,9 +8,9 @@
 //
 // Dependencies are injected via createMonitorFocusController(deps) — same pattern
 // as createHotkeyController — so the subsystem has an explicit contract and can
-// be exercised with stubs. The dim-state itself lives in the store's "focus"
-// slice (seeded here); external readers (the schedule apply, the idle-wake reset)
-// read it through store.get("focus").
+// be exercised with stubs. The dim-state itself is owned here and stays local:
+// it is never persisted or broadcast, so it has no reason to live in the store.
+// External readers (the schedule apply) query it through isAnyDimmed/isDimmed.
 
 const MonitorFocus = require("./monitorFocus")
 
@@ -32,14 +32,12 @@ function createMonitorFocusController(deps) {
     pauseMouseEvents
   } = deps
 
-  // focus slice (store-owned): inactive-dim runtime state. All three are stable
-  // references mutated in place — the Set via .clear(), the maps via per-key
-  // writes/deletes (cleared by deleting keys, not reassigning, so the aliases
-  // stay valid).
-  store.update("focus", { monitorFocusDimmed: new Set(), monitorLastVisited: {}, monitorPreDimBrightness: {} })
-  const monitorFocusDimmed = store.get("focus").monitorFocusDimmed
-  const monitorLastVisited = store.get("focus").monitorLastVisited
-  const monitorPreDimBrightness = store.get("focus").monitorPreDimBrightness
+  // Inactive-dim runtime state (controller-local — see header). The maps are
+  // cleared by deleting keys, not reassigning, so external `for..in` callers
+  // never see a stale reference; the Set is cleared via .clear().
+  const monitorFocusDimmed = new Set()
+  const monitorLastVisited = {}
+  const monitorPreDimBrightness = {}
 
   let monitorFocusInterval = null
   // Per-monitor transition intervals, keyed by monitor id. Keeping them separate
@@ -279,7 +277,10 @@ function createMonitorFocusController(deps) {
     stop: stopMonitorFocusTracking,
     reset: resetMonitorFocusState,
     invalidateDisplayCache,
-    clearDimmedStateAfterIdle
+    clearDimmedStateAfterIdle,
+    // Inactive-dim queries for external priority logic (schedule apply).
+    isAnyDimmed: () => monitorFocusDimmed.size > 0,
+    isDimmed: (monitorId) => monitorFocusDimmed.has(monitorId)
   }
 }
 

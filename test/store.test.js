@@ -58,3 +58,56 @@ test('replacing a nested object counts as a change; equal primitive does not', (
   const diff = store.update('monitors', { list: [1, 2] })
   assert.deepStrictEqual(diff, { list: [1, 2] }, 'new array reference is a change')
 })
+
+// --- entity slices: ref / touch / onTouch ---
+
+test('ref returns the live mutable value; in-place edits are visible through it', () => {
+  const store = createStore({ monitors: { all: {} } })
+  const all = store.ref('monitors', 'all')
+  all['mon1'] = { brightness: 50 }
+  assert.strictEqual(store.get('monitors').all, all, 'ref is the same reference the slice holds')
+  assert.strictEqual(store.ref('monitors', 'all')['mon1'].brightness, 50)
+})
+
+test('in-place mutation is invisible to update/subscribe (the reason touch exists)', () => {
+  const store = createStore({ monitors: { all: {} } })
+  let fired = false
+  store.subscribe('monitors', () => { fired = true })
+  const all = store.ref('monitors', 'all')
+  all['mon1'] = { brightness: 50 }
+  const diff = store.update('monitors', { all }) // same reference
+  assert.deepStrictEqual(diff, {}, 'same-reference update is a no-op')
+  assert.strictEqual(fired, false, 'subscribe cannot see in-place edits')
+})
+
+test('touch emits touch:<slice> with the full slice and always fires', () => {
+  const store = createStore({ monitors: { all: { mon1: {} } } })
+  const calls = []
+  store.onTouch('monitors', (slice) => calls.push(slice))
+  store.touch('monitors')
+  store.touch('monitors') // no diff suppression — fires every time
+  assert.strictEqual(calls.length, 2)
+  assert.strictEqual(calls[0], store.get('monitors'), 'receives the full slice')
+})
+
+test('touch and change are separate channels; update does not trigger onTouch', () => {
+  const store = createStore({ monitors: { all: {}, isRefreshing: false } })
+  let touched = 0
+  let changed = 0
+  store.onTouch('monitors', () => { touched++ })
+  store.subscribe('monitors', () => { changed++ })
+  store.update('monitors', { isRefreshing: true }) // reactive write
+  store.touch('monitors')                          // entity announce
+  assert.strictEqual(changed, 1, 'update fired change only')
+  assert.strictEqual(touched, 1, 'touch fired touch only')
+})
+
+test('onTouch returns an unsubscribe that stops further touch delivery', () => {
+  const store = createStore({ monitors: { all: {} } })
+  let count = 0
+  const off = store.onTouch('monitors', () => { count++ })
+  store.touch('monitors')
+  off()
+  store.touch('monitors')
+  assert.strictEqual(count, 1)
+})

@@ -1,15 +1,27 @@
 // Main-process state store: the single owner of application state.
 //
-// Each slice of state has one owner: mutation happens only through `update`,
-// which computes a diff and emits a change event. Main-process code subscribes
-// to changes; renderers are driven from those subscriptions.
-//
 // State is organised into named slices (e.g. "settings", "monitors", "panel").
-// `update` does a shallow merge and only emits when something actually changed,
-// so subscribers (including the disk-persistence and renderer-broadcast bridges)
-// never fire on no-op writes. Equality is shallow (===): replacing a nested
-// object/array counts as a change; mutating one in place does not — always pass
-// a fresh value in the patch.
+// A slice has one of two shapes — know which before you touch it:
+//
+//   1. Reactive slice (the default). Holds scalar / replaceable values. Mutate
+//      through `update`, which shallow-merges the patch, computes a `===` diff
+//      and emits `change:<slice>` only when something actually changed. Equality
+//      is shallow: replacing a nested object/array counts; mutating one in place
+//      does NOT — always pass a fresh value. Subscribe with `subscribe`.
+//
+//   2. Entity slice. Holds one long-lived collection (object / Set / Map) that is
+//      mutated in place on hot paths — replacing it per write would churn a tight
+//      loop (e.g. the monitors model on every brightness tick). The reference
+//      never changes, so `update`'s `===` diff is blind to those edits by design.
+//      Grab the live ref once with `ref(slice, key)`, mutate it directly, then
+//      call `touch(slice)` to announce the change. Subscribe with `onTouch`.
+//      `touch`/`onTouch` ride a separate `touch:<slice>` event, so an entity
+//      slice can also carry reactive scalar keys (updated via `update`) without
+//      the two signals colliding.
+//
+// One rule spans both: a value is either reactive-and-replaced or
+// entity-and-touched. Don't mutate a reactive value in place (silent), and don't
+// route entity mutations through `update` (it can't see them).
 
 const { EventEmitter } = require('events')
 
@@ -64,7 +76,32 @@ function createStore(initialState = {}) {
     return () => emitter.off(event, fn)
   }
 
-  return { get, update, subscribe }
+  // Entity-slice access. Return the live, mutable value at state[slice][key]
+  // (creating the slice if absent). Callers mutate it in place and announce the
+  // change with `touch(slice)`. Declaring access through `ref` — rather than
+  // `get(slice).key` — marks the value as mutate-in-place at the call site.
+  function ref(slice, key) {
+    if (state[slice] === undefined) state[slice] = {}
+    return state[slice][key]
+  }
+
+  // Announce that an entity slice was mutated in place. Always emits
+  // `touch:<slice>` with the full slice; unlike `update` there is no diff and no
+  // no-op suppression — the caller asked to broadcast, so it broadcasts.
+  function touch(slice) {
+    if (state[slice] === undefined) state[slice] = {}
+    emitter.emit(`touch:${slice}`, state[slice])
+  }
+
+  // Subscribe to `touch` announcements for an entity slice. `fn` receives the
+  // full slice. Returns an unsubscribe function.
+  function onTouch(slice, fn) {
+    const event = `touch:${slice}`
+    emitter.on(event, fn)
+    return () => emitter.off(event, fn)
+  }
+
+  return { get, update, subscribe, ref, touch, onTouch }
 }
 
 // Default singleton — the application's one state store. Tests use createStore

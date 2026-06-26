@@ -19,9 +19,10 @@ function createSoftwareDim(deps) {
 
   // overlay BrowserWindow handles (mechanism, not state)
   const softwareDimOverlays = {}
-  // Software-dim levels per monitor — stable map aliased from the "color" slice.
+  // Software-dim levels per monitor — an entity value on the "color" slice (see
+  // state/store.js): a live, mutate-in-place map.
   store.update("color", { softwareDimLevels: {} })
-  const softwareDimLevels = store.get("color").softwareDimLevels
+  const softwareDimLevels = store.ref("color", "softwareDimLevels")
 
   function getSoftwareDimDisplayBounds(monitorId) {
     const pair = MonitorTransforms.pairDisplaysToMonitors(screen.getAllDisplays(), monitors)

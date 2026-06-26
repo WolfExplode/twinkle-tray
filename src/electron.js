@@ -32,6 +32,31 @@ const { createHotkeyController } = require("./hotkeys")
 const { store } = require("./state/store") // single owner of application state; slices migrate here one at a time
 const logger = require('./logger') // init()'d in the Logging block below once logPath is known
 
+// ---------------------------------------------------------------------------
+// Where main-process state lives (state migration: status & stopping line)
+//
+// Application *state* is migrating into the store (src/state/store.js), one slice
+// at a time (commits "Phase 0".."Phase 9g"). This file still declares ~50
+// module-level `let`/`var` bindings. They are NOT all unfinished migration — they
+// fall into four buckets. When adding or moving state, put it in the right one:
+//
+//   1. Store, reactive slice — shared scalar/replaceable state. Read/written via
+//      store.update/get/subscribe. (settings, panel, idle, updates, theme, mica,
+//      power, profile, …) This is where new shared state should go.
+//   2. Store, entity slice — a live collection mutated in place on hot paths,
+//      announced via store.touch/onTouch (monitors.all, schedule.scheduledBrightness,
+//      color.softwareDimLevels). See store.js for the two-shape contract.
+//   3. Runtime handles / mechanism — NOT state, never migrates: window handles
+//      (mainWindow, tray, settingsWindow, introWindow), worker/IPC handles
+//      (monitorsThread, mouseEvents), the Translate instance (T), and the many
+//      setTimeout/setInterval handles. These stay module-global on purpose.
+//   4. Not-yet-migrated control flags — local booleans/timestamps that gate flow
+//      (skipFirstMonChange, isStartupGracePeriod, pausedMonitorUpdates,
+//      lastRefreshMonitors, detectedTaskbarPos/Height/Hide, micaBusy, …). These
+//      are the remaining migration surface; fold them into a slice when their
+//      feature's slice is next touched, rather than in a big-bang sweep.
+// ---------------------------------------------------------------------------
+
 const configFilesDir = (isPortable ? path.join(__dirname, "../../config/") : app.getPath("userData"))
 const settingsPath = path.join(configFilesDir, `\\settings${(isDev ? "-dev" : "")}.json`)
 const knownDisplaysPath = path.join(configFilesDir, `\\known-displays${(isDev ? "-dev" : "")}.json`)
@@ -412,12 +437,12 @@ function willPauseMouseEvents(time = 10000) {
 
 
 
-// monitors slice (store-owned). `monitors` aliases the slice's stable map of
-// monitor objects (mutated in place; the one wholesale refresh replaces its
-// contents in place). lastKnownDisplays is a reassigned value read/written
-// through the store.
-store.update("monitors", { all: {}, lastKnownDisplays: undefined })
-const monitors = store.get("monitors").all
+// monitors slice. `all` is an entity value (see state/store.js): `monitors`
+// holds the live, mutate-in-place map of monitor objects — edits are announced
+// with touchMonitors() (store.touch). lastKnownDisplays is a reactive value
+// read/written separately through `update`.
+store.update("monitors", { all: {} })
+const monitors = store.ref("monitors", "all")
 let mainWindow;
 let tray = null
 // theme slice (store-owned): lastTheme holds the Windows theme registry values
@@ -1368,19 +1393,17 @@ function sendToAllWindows(eventName, data) {
   }
 }
 
-// Renderer sync for the monitors model. The map (`monitors`) is mutated in
-// place on hot paths (brightness/transition loops), so the store can't detect
-// those edits by value. Code that changes the map calls touchMonitors(), which
-// bumps a revision counter on the slice; the single subscriber below is the one
-// place that broadcasts the map to renderers. Other monitors-slice writes
-// (isRefreshing, lastKnownDisplays, …) carry no `rev`, so they don't trigger a
-// renderer broadcast.
+// Renderer sync for the monitors model. `monitors` is an entity slice (see
+// state/store.js) — the map is mutated in place on hot paths (brightness /
+// transition loops), so `update`'s value diff can't see those edits. Code that
+// changes the map calls touchMonitors(); the single subscriber below is the one
+// place that broadcasts the map to renderers. Reactive monitors-slice writes
+// (isRefreshing, lastKnownDisplays, …) go through `update`/`change:monitors` and
+// ride a separate event, so they don't trigger a renderer broadcast.
 function touchMonitors() {
-  store.update("monitors", { rev: (store.get("monitors").rev ?? 0) + 1 })
+  store.touch("monitors")
 }
-store.subscribe("monitors", (diff) => {
-  if ("rev" in diff) sendToAllWindows("monitors-updated", monitors)
-})
+store.onTouch("monitors", () => sendToAllWindows("monitors-updated", monitors))
 
 //
 // Window navigation security
@@ -4043,19 +4066,22 @@ function idleCheckShort() {
 
 // Per-monitor inactive dimming ("Monitor Focus"). The stateful controller lives
 // in ./monitorFocusController.js; here we seed its dependencies and instantiate
-// it. The focus runtime state is owned by the store's "focus" slice (seeded by
-// the controller); external readers below reach it via store.get("focus").
+// it. The inactive-dim runtime state (which monitors are dimmed, when each was
+// last visited, pre-dim brightness) is owned entirely by the controller — it is
+// never persisted or broadcast, so it stays controller-local rather than in the
+// store. External code queries it through the controller's API (isAnyDimmed /
+// isDimmed) below.
 
 // Priority brightness system:
 // Windows asleep > Idle dim > Inactive monitor dim > Schedule > Manual
 // scheduledBrightness tracks what the schedule intends for each monitor,
 // including monitors that are currently inactive-dimmed, so restoration
 // always reflects the current schedule rather than a stale saved value.
-// schedule slice (store-owned). scheduledBrightness is a stable map reference
-// mutated in place; lastTimeEvent (seeded further below) is a reassigned value
-// read and written through the store.
+// schedule slice. scheduledBrightness is an entity value (see state/store.js):
+// a live, mutate-in-place map. lastTimeEvent (seeded further below) is a
+// reactive value read/written through `update`.
 store.update("schedule", { scheduledBrightness: {} })
-const scheduledBrightness = store.get("schedule").scheduledBrightness // { [monitorId]: { brightness, softwareDim } }
+const scheduledBrightness = store.ref("schedule", "scheduledBrightness") // { [monitorId]: { brightness, softwareDim } }
 
 const monitorFocus = createMonitorFocusController({
   store,
@@ -4154,9 +4180,8 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 
           // Skip monitors that are currently inactive-dimmed — they will pick up the new
           // schedule value when the user moves their cursor back to them.
-          const monitorFocusDimmed = store.get("focus").monitorFocusDimmed
-          const onlyMonitorIds = monitorFocusDimmed.size > 0
-            ? Object.values(monitors).map(m => m.id).filter(id => !monitorFocusDimmed.has(id))
+          const onlyMonitorIds = monitorFocus.isAnyDimmed()
+            ? Object.values(monitors).map(m => m.id).filter(id => !monitorFocus.isDimmed(id))
             : null
 
           // When some monitors are being skipped (inactive-dimmed), always apply instantly
