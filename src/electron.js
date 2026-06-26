@@ -19,7 +19,7 @@ const isPortable = (app.name == "twinkle-tray-portable" ? true : false)
 
 const Utils = require("./Utils")
 const AdjustmentTimes = require("./adjustmentTimes")
-const MonitorFocus = require("./monitorFocus")
+const { createMonitorFocusController } = require("./monitorFocusController")
 const MonitorTransforms = require("./monitorTransforms")
 const Profiles = require("./profiles")
 const UpdateCheck = require("./updateCheck")
@@ -345,7 +345,7 @@ function enableMouseEvents() {
 
 
     mouseEvents.on("mousemove", (e) => {
-      handleMonitorFocusMouseMove(e.x, e.y)
+      monitorFocus.handleMouseMove(e.x, e.y)
     })
 
     // Handle edge cases where "blur" event doesn't properly fire
@@ -836,10 +836,10 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.monitorFocusEnabled !== undefined) {
       if (settings.monitorFocusEnabled) {
-        startMonitorFocusTracking()
+        monitorFocus.start()
       } else {
-        stopMonitorFocusTracking()
-        resetMonitorFocusState()
+        monitorFocus.stop()
+        monitorFocus.reset()
       }
     }
 
@@ -3331,9 +3331,9 @@ if(isDev) {
 }
 
 app.on("ready", async () => {
-  screen.on("display-added", invalidateDisplayCache)
-  screen.on("display-removed", invalidateDisplayCache)
-  screen.on("display-metrics-changed", invalidateDisplayCache)
+  screen.on("display-added", monitorFocus.invalidateDisplayCache)
+  screen.on("display-removed", monitorFocus.invalidateDisplayCache)
+  screen.on("display-metrics-changed", monitorFocus.invalidateDisplayCache)
 
   await getAllLanguages()
   await getThemeRegistry()
@@ -3371,7 +3371,7 @@ app.on("ready", async () => {
   
     setTimeout(addEventListeners, 5000)
     setTimeout(() => {
-      if (settings.monitorFocusEnabled) startMonitorFocusTracking()
+      if (settings.monitorFocusEnabled) monitorFocus.start()
     }, 6000)
   })
 
@@ -4169,8 +4169,8 @@ function handleMonitorChange(t, e, d) {
     handleBackgroundUpdate(true) // Apply Time Of Day Adjustments
 
     if (settings.monitorFocusEnabled) {
-      resetMonitorFocusState()
-      startMonitorFocusTracking()
+      monitorFocus.reset()
+      monitorFocus.start()
     }
 
     // If displays not shown, refresh mainWindow
@@ -4445,13 +4445,7 @@ function idleCheckShort() {
         // Clear inactive dim state so all monitors get a fresh timeout window after
         // returning from idle. Also clear any software dim overlays that were active
         // from inactive dimming before idle kicked in.
-        if (settings.monitorFocusEnabled) {
-          for (const monitorId of monitorFocusDimmed) {
-            updateSoftwareDim(monitorId, 0)
-          }
-          clearMonitorFocusMaps()
-          monitorFocusDimmed.clear()
-        }
+        if (settings.monitorFocusEnabled) monitorFocus.clearDimmedStateAfterIdle()
 
         block.release()
 
@@ -4465,28 +4459,10 @@ function idleCheckShort() {
 }
 
 
-// Per-monitor inactive dimming
-let monitorFocusInterval = null
-// focus slice (store-owned): monitor-focus (inactive-dim) state. All three are
-// stable references aliased below and mutated in place — the Set via .clear(),
-// the maps via per-key writes/deletes (cleared by deleting keys, not reassigning,
-// so the aliases stay valid).
-store.update("focus", { monitorFocusDimmed: new Set(), monitorLastVisited: {}, monitorPreDimBrightness: {} })
-const monitorFocusDimmed = store.get("focus").monitorFocusDimmed
-const monitorLastVisited = store.get("focus").monitorLastVisited
-const monitorPreDimBrightness = store.get("focus").monitorPreDimBrightness
-
-function clearMonitorFocusMaps() {
-  for (const k in monitorLastVisited) delete monitorLastVisited[k]
-  for (const k in monitorPreDimBrightness) delete monitorPreDimBrightness[k]
-}
-let electronToMonitorMap = {}
-let cachedElectronDisplays = null
-
-function invalidateDisplayCache() {
-  cachedElectronDisplays = null
-  if (settings.monitorFocusEnabled) buildElectronMonitorMap()
-}
+// Per-monitor inactive dimming ("Monitor Focus"). The stateful controller lives
+// in ./monitorFocusController.js; here we seed its dependencies and instantiate
+// it. The focus runtime state is owned by the store's "focus" slice (seeded by
+// the controller); external readers below reach it via store.get("focus").
 
 // Priority brightness system:
 // Windows asleep > Idle dim > Inactive monitor dim > Schedule > Manual
@@ -4499,206 +4475,22 @@ function invalidateDisplayCache() {
 store.update("schedule", { scheduledBrightness: {} })
 const scheduledBrightness = store.get("schedule").scheduledBrightness // { [monitorId]: { brightness, softwareDim } }
 
-function buildElectronMonitorMap() {
-  const displays = (cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays()))
-  electronToMonitorMap = MonitorFocus.buildMonitorMap(displays, Object.values(monitors || {}))
-  logger.debug(`\x1b[36mBuilt monitor focus map: ${JSON.stringify(electronToMonitorMap)}\x1b[0m`)
-}
-
-function getActiveMonitorFromPoint(x, y) {
-  const displays = cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays())
-  const monitorId = MonitorFocus.monitorIdAtPoint(displays, electronToMonitorMap, x, y)
-  if (!monitorId) return null
-  return Object.values(monitors).find(m => m.id === monitorId) || null
-}
-
-function getActiveMonitorFromCursor() {
-  const cursorPoint = screen.getCursorScreenPoint()
-  return getActiveMonitorFromPoint(cursorPoint.x, cursorPoint.y)
-}
-
-let monitorFocusTransition = null
-function stopMonitorFocusTransition() {
-  if (monitorFocusTransition) {
-    clearInterval(monitorFocusTransition)
-    monitorFocusTransition = null
-  }
-}
-
-
-function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDim = 0) {
-  stopMonitorFocusTransition()
-
-  const TICK_MS = 16
-  const DDC_THROTTLE_MS = 50
-  const durationMs = Math.max(100, settings.monitorFocusTransitionDuration ?? 1000)
-  const startBrightness = monitor.brightness
-  const startSoftwareDim = softwareDimLevels[monitor.id] || 0
-  const startTime = Date.now()
-  let lastSentBrightness = startBrightness
-  let lastSentSoftwareDim = startSoftwareDim
-  let lastDDCWrite = 0
-
-  monitorFocusTransition = setInterval(() => {
-    const elapsed = Date.now() - startTime
-    const now = startTime + elapsed
-    const progress = Math.min(1, elapsed / durationMs)
-    const { brightness: currentBrightness, softwareDim: currentSoftwareDim } = MonitorFocus.computeTransitionStep({
-      startBrightness, targetBrightness, startSoftwareDim, targetSoftwareDim, progress
-    })
-    let uiUpdated = false
-
-    if (currentBrightness !== lastSentBrightness && now - lastDDCWrite >= DDC_THROTTLE_MS) {
-      updateBrightness(monitor.id, currentBrightness, true, "brightness", false)
-      lastSentBrightness = currentBrightness
-      lastDDCWrite = now
-      uiUpdated = true
-    }
-
-    if (startSoftwareDim !== targetSoftwareDim) {
-      updateSoftwareDim(monitor.id, progress >= 1 ? targetSoftwareDim : currentSoftwareDim)
-      lastSentSoftwareDim = currentSoftwareDim
-      uiUpdated = true
-    }
-
-    if (progress >= 1) {
-      if (lastSentBrightness !== targetBrightness) {
-        updateBrightness(monitor.id, targetBrightness, true, "brightness", false)
-      }
-      updateSoftwareDim(monitor.id, targetSoftwareDim)
-      stopMonitorFocusTransition()
-      uiUpdated = true
-    }
-
-    if (uiUpdated) touchMonitors()
-  }, TICK_MS)
-}
-
-function restoreMonitorFocusBrightness(monitor) {
-  if (!monitor || !monitorFocusDimmed.has(monitor.id)) return false
-
-  // Prefer the schedule's current intended value so we land on the right brightness
-  // even if the schedule changed while this monitor was inactive-dimmed.
-  // Fall back to the brightness saved just before dimming started.
-  const scheduleActive = settings.adjustmentTimesActive && !tempSettings.pauseTimeAdjustments
-  const { brightness: targetBrightness, softwareDim: targetSoftwareDim } = MonitorFocus.getRestoreTarget({
-    scheduleActive,
-    scheduledBrightness: scheduledBrightness[monitor.id],
-    preDimBrightness: monitorPreDimBrightness[monitor.id]
-  })
-
-  stopMonitorFocusTransition()
-  if (targetBrightness !== undefined) {
-    updateBrightness(monitor.id, targetBrightness, true, "brightness")
-    logger.debug(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
-  }
-  updateSoftwareDim(monitor.id, targetSoftwareDim)
-  monitorFocusDimmed.delete(monitor.id)
-  delete monitor.inactiveDimmed
-  delete monitorPreDimBrightness[monitor.id]
-  touchMonitors()
-  return true
-}
-
-let lastMonitorFocusMove = 0
-function handleMonitorFocusMouseMove(x, y) {
-  if (!settings.monitorFocusEnabled || !monitors || store.get("idle").userIdleDimmed || store.get("idle").isWindowsUserIdle) return
-  if (tempSettings.pauseIdleDetection) return
-
-  const now = Date.now()
-
-  // Skip lookup entirely if debounce hasn't expired and no monitors need restoring
-  if (monitorFocusDimmed.size === 0 && now - lastMonitorFocusMove < 250) return
-
-  const activeMonitor = getActiveMonitorFromPoint(x, y)
-  if (!activeMonitor) return
-
-  if (monitorFocusDimmed.has(activeMonitor.id)) {
-    restoreMonitorFocusBrightness(activeMonitor)
-    monitorLastVisited[activeMonitor.id] = now
-    return
-  }
-
-  if (now - lastMonitorFocusMove < 250) return
-  lastMonitorFocusMove = now
-  monitorLastVisited[activeMonitor.id] = now
-}
-
-function checkMonitorFocus() {
-  if (!monitors || store.get("idle").userIdleDimmed || store.get("idle").isWindowsUserIdle) return
-  if (tempSettings.pauseIdleDetection) return
-
-  const activeMonitor = getActiveMonitorFromCursor()
-  const now = Date.now()
-  const timeout = MonitorFocus.computeTimeoutMs(settings.monitorFocusSeconds, settings.monitorFocusMinutes)
-
-  if (activeMonitor) {
-    monitorLastVisited[activeMonitor.id] = now
-    restoreMonitorFocusBrightness(activeMonitor)
-  }
-
-  for (const monitor of Object.values(monitors)) {
-    if (!monitor.id || shouldSkipDisplay(monitor, true)) continue
-    if (monitorFocusDimmed.has(monitor.id)) continue
-    if (activeMonitor && monitor.id === activeMonitor.id) continue
-
-    const lastVisited = monitorLastVisited[monitor.id] || 0
-    if (now - lastVisited < timeout) continue
-
-    const dimLevel = settings.monitorFocusDimLevel ?? 0
-    const softwareDimTarget = settings.monitorFocusSoftwareDim ?? 0
-    const currentSoftwareDim = softwareDimLevels[monitor.id] || 0
-    if (!MonitorFocus.shouldDimMonitor({ now, lastVisited, timeout, brightness: monitor.brightness, dimLevel, currentSoftwareDim, softwareDimTarget })) {
-      // Already at or below the dim target — applying it would raise brightness.
-      logger.debug(`\x1b[36mSkipping inactive dim for ${monitor.id} — already at or below dim target\x1b[0m`)
-      continue
-    }
-    monitorPreDimBrightness[monitor.id] = monitor.brightness
-    monitorFocusDimmed.add(monitor.id)
-    monitor.inactiveDimmed = true
-    applyMonitorFocusTransition(monitor, dimLevel, softwareDimTarget)
-    logger.debug(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
-  }
-}
-
-function startMonitorFocusTracking() {
-  stopMonitorFocusTracking()
-  const now = Date.now()
-  for (const monitor of Object.values(monitors || {})) {
-    if (!monitorLastVisited[monitor.id]) {
-      monitorLastVisited[monitor.id] = now
-    }
-  }
-  buildElectronMonitorMap()
-  enableMouseEvents()
-  pauseMouseEvents(false)
-  monitorFocusInterval = setInterval(checkMonitorFocus, 2000)
-  logger.debug(`\x1b[36mStarted monitor focus tracking.\x1b[0m`)
-}
-
-function stopMonitorFocusTracking() {
-  stopMonitorFocusTransition()
-  if (monitorFocusInterval) {
-    clearInterval(monitorFocusInterval)
-    monitorFocusInterval = null
-  }
-}
-
-function resetMonitorFocusState() {
-  stopMonitorFocusTransition()
-  for (const monitorId of monitorFocusDimmed) {
-    const monitor = Object.values(monitors || {}).find(m => m.id === monitorId)
-    const savedLevel = monitorPreDimBrightness[monitorId]
-    if (monitor) {
-      if (savedLevel !== undefined) updateBrightness(monitorId, savedLevel, true, "brightness")
-      delete monitor.inactiveDimmed
-    }
-    updateSoftwareDim(monitorId, 0)
-  }
-  clearMonitorFocusMaps()
-  monitorFocusDimmed.clear()
-  electronToMonitorMap = {}
-}
+const monitorFocus = createMonitorFocusController({
+  store,
+  settings,
+  monitors,
+  tempSettings,
+  softwareDimLevels,
+  scheduledBrightness,
+  screen,
+  logger,
+  updateBrightness,
+  updateSoftwareDim,
+  touchMonitors,
+  shouldSkipDisplay,
+  enableMouseEvents,
+  pauseMouseEvents
+})
 
 
 // Get the currently applicable Time of Day Adjustment.
@@ -4782,6 +4574,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 
           // Skip monitors that are currently inactive-dimmed — they will pick up the new
           // schedule value when the user moves their cursor back to them.
+          const monitorFocusDimmed = store.get("focus").monitorFocusDimmed
           const onlyMonitorIds = monitorFocusDimmed.size > 0
             ? Object.values(monitors).map(m => m.id).filter(id => !monitorFocusDimmed.has(id))
             : null
