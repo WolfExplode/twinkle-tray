@@ -1,3 +1,4 @@
+"use strict"
 const { app } = require('electron')
 const fs = require('fs')
 
@@ -5,10 +6,10 @@ const path = require('path');
 
 let isDev = app.commandLine.hasSwitch("dev")
 
-let package = fs.readFileSync(isDev ? "package.json" : __dirname + '/../package.json')
-if(package) package = JSON.parse(package)
+let packageJson = fs.readFileSync(isDev ? "package.json" : __dirname + '/../package.json')
+if(packageJson) packageJson = JSON.parse(packageJson)
 
-const appVersionFull = (package?.versionBuild ?? app.getVersion())
+const appVersionFull = (packageJson?.versionBuild ?? app.getVersion())
 const appVersion = appVersionFull.split('+')[0]
 const appVersionTag = appVersion?.split('-')[1]
 const appBuild = (isDev ? "dev" : appVersionFull.split('+')[1])
@@ -2519,7 +2520,7 @@ ipcMain.on('save-report', async () => {
     })
     })
   } catch (e) {
-    reject("getReport failed to send.")
+    logger.error("getReport failed to send.", e)
   }
 })
 
