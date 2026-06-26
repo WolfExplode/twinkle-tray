@@ -166,6 +166,22 @@ test('normalizeBrightness maps to the min/max cap range when sending', () => {
   assert.strictEqual(Utils.normalizeBrightness(50, false, 20, 80), 50)
 })
 
+test('readInstanceName splits an InstanceName into hwid parts and unescapes &amp;', () => {
+  assert.deepStrictEqual(
+    Utils.readInstanceName("DISPLAY\\DELA1AB\\7&1234&0&UID4352"),
+    ["DISPLAY", "DELA1AB", "7&1234&0&UID4352"]
+  )
+  assert.deepStrictEqual(Utils.readInstanceName("A&amp;B\\C"), ["A&B", "C"])
+  assert.strictEqual(Utils.readInstanceName(undefined), undefined)
+  assert.strictEqual(Utils.readInstanceName(""), undefined)
+})
+
+test('parseWMIString decodes semicolon-separated char codes', () => {
+  assert.strictEqual(Utils.parseWMIString("72;101;108;108;111"), "Hello")
+  assert.strictEqual(Utils.parseWMIString("{72;105}"), "Hi") // strips braces
+  assert.strictEqual(Utils.parseWMIString(null), null)
+})
+
 test('vcpStr formats a code as an uppercase 0x hex string', () => {
   assert.strictEqual(Utils.vcpStr(18), "0x12")
   assert.strictEqual(Utils.vcpStr(0x62), "0x62")

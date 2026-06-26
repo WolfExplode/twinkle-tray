@@ -233,7 +233,9 @@ Flag to show brightness levels in the panel
     normalizeBrightness,
     minMax,
     vcpStr,
-    determineTheme
+    determineTheme,
+    readInstanceName,
+    parseWMIString
 }
 
 
@@ -579,6 +581,26 @@ function minMax(value, min = 0, max = 100) {
 // Format a VCP code as an uppercase "0x.." string (e.g. 18 -> "0x12").
 function vcpStr(code) {
     return `0x${parseInt(code).toString(16).toUpperCase()}`
+}
+
+// Split a Windows monitor InstanceName into its backslash-separated hwid parts,
+// un-escaping the "&amp;" entities WMI returns. Returns undefined for no input.
+function readInstanceName(insName) {
+    return (insName ? insName.replace(/&amp;/g, '&').split("\\") : undefined)
+}
+
+// Decode the semicolon-separated decimal char codes WMI uses for strings
+// (e.g. UserFriendlyName, SerialNumberID) into a plain string. Zero entries are
+// remapped to 32 (space) to match the original behaviour. null passes through.
+function parseWMIString(str) {
+    if (str === null) return str;
+    let hexed = str.replace('{', '').replace('}', '').replace(/;0/g, ';32')
+    let decoded = '';
+    const split = hexed.split(';')
+    for (let i = 0; (i < split.length); i++)
+        decoded += String.fromCharCode(parseInt(split[i], 10));
+    decoded = decoded.trim()
+    return decoded;
 }
 
 // Resolve a theme setting ("dark"/"light"/anything else) to "dark" or "light".

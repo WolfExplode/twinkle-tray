@@ -24,6 +24,7 @@ const w32disp = require("win32-displayconfig");
 const wmibridge = require("wmi-bridge");
 const hdr = require("windows-hdr");
 const { exec } = require('child_process');
+const Utils = require('./Utils')
 require("os").setPriority(0, require("os").constants.priority.PRIORITY_BELOW_NORMAL)
 
 let lastDDCCIList = []
@@ -371,7 +372,7 @@ async function getAllMonitors(ddcciMethod = "default") {
 
             if(brightness) {
                 ddcciInfo.brightnessValues = brightness
-                features[vcpStr(brightnessType)] = brightness
+                features[Utils.vcpStr(brightnessType)] = brightness
             }       
 
             ddcciInfo.brightnessRaw = ddcciInfo.brightnessValues[0]
@@ -575,7 +576,7 @@ function getMonitorsWMI() {
 
                     if (!monitor.InstanceName) continue;
 
-                    let hwid = readInstanceName(monitor.InstanceName)
+                    let hwid = Utils.readInstanceName(monitor.InstanceName)
                     hwid[2] = hwid[2].split("_")[0]
 
                     const wmiInfo = {
@@ -750,7 +751,7 @@ async function checkMonitorFeatures(monitor, skipCache = false, ddcciMethod = "a
             let getAllValues = false
             if(getAllValues && monitorReports[monitor]) {
                 for(const code in monitorReports[monitor]) {
-                    features[vcpStr(code)] = await checkVCP(monitor, code)
+                    features[Utils.vcpStr(code)] = await checkVCP(monitor, code)
                 }
             } else {
                 // Get custom DDC/CI features
@@ -761,7 +762,7 @@ async function checkMonitorFeatures(monitor, skipCache = false, ddcciMethod = "a
                             continue; // Skip if custom brightness
                         }
                         if(settingsFeatures[vcp]) {
-                            features[vcpStr(vcp)] = await checkVCPIfEnabled(monitor, parseInt(vcp), vcp, skipCache)
+                            features[Utils.vcpStr(vcp)] = await checkVCPIfEnabled(monitor, parseInt(vcp), vcp, skipCache)
                         }
                     }
                 }
@@ -815,7 +816,7 @@ function getBrightnessWMI() {
                 clearTimeout(timeout)
                 resolve(false)
             } else {
-                let hwid = readInstanceName(monitor.InstanceName)
+                let hwid = Utils.readInstanceName(monitor.InstanceName)
                 hwid[2] = hwid[2].split("_")[0]
 
                 let wmiInfo = {
@@ -896,7 +897,7 @@ function getBrightnessDDC(monitorObj) {
                         continue; // Skip brightness
                     }
                     if(settingsFeatures[vcp]) {
-                        monitor.features[vcpStr(vcp)] = await checkVCP(monitor.id, parseInt(vcp))
+                        monitor.features[Utils.vcpStr(vcp)] = await checkVCP(monitor.id, parseInt(vcp))
                     }
                 }
             }
@@ -989,7 +990,7 @@ function setBrightness(brightness, id) {
 
 let vcpCache = {}
 async function checkVCPIfEnabled(monitor, code, setting, skipCache = false) {
-    const vcpString = vcpStr(code)
+    const vcpString = Utils.vcpStr(code)
     if(!code || code == "0x0") return false;
     try {
         const hwid = monitor.split("#")
@@ -1018,7 +1019,7 @@ async function checkVCPIfEnabled(monitor, code, setting, skipCache = false) {
 }
 
 async function checkIfVCPSupported(monitor, code) {
-    const vcpString = vcpStr(code)
+    const vcpString = Utils.vcpStr(code)
     if(!code || code == "0x0") return false;
     try {
         const isInReport = monitorReports[monitor]?.[vcpString] ? true : false
@@ -1038,7 +1039,7 @@ async function checkIfVCPSupported(monitor, code) {
 }
 
 async function checkVCP(monitor, code, skipCacheWrite = false) {
-    const vcpString = vcpStr(code)
+    const vcpString = Utils.vcpStr(code)
     if(!code || code == "0x0") return false;
     try {
         let result = ddcci._getVCP(monitor, parseInt(vcpString))
@@ -1069,7 +1070,7 @@ async function checkVCP(monitor, code, skipCacheWrite = false) {
 async function setVCP(monitor, code, value) {
     if(busyLevel > 0) while(busyLevel > 0) { await wait(100) } // Wait until no longer busy
     try {
-        const vcpString = vcpStr(code)
+        const vcpString = Utils.vcpStr(code)
         let result = ddcci._setVCP(monitor, code, (value * 1))
         if (vcpCache[monitor]?.["vcp_" + vcpString]) {
             vcpCache[monitor]["vcp_" + vcpString][0] = (value * 1)
@@ -1152,21 +1153,6 @@ function applyRemap(monitor) {
 }
 
 
-function readInstanceName(insName) {
-    return (insName ? insName.replace(/&amp;/g, '&').split("\\") : undefined)
-}
-
-function parseWMIString(str) {
-    if (str === null) return str;
-    let hexed = str.replace('{', '').replace('}', '').replace(/;0/g, ';32')
-    var decoded = '';
-    var split = hexed.split(';')
-    for (var i = 0; (i < split.length); i++)
-        decoded += String.fromCharCode(parseInt(split[i], 10));
-    decoded = decoded.trim()
-    return decoded;
-}
-
 let ddcci = false
 function getDDCCI() {
     if (ddcci) return false;
@@ -1231,18 +1217,18 @@ function getMonitorsWMIC() {
 
                     if (!monitor.InstanceName) continue;
 
-                    let hwid = readInstanceName(monitor.InstanceName)
+                    let hwid = Utils.readInstanceName(monitor.InstanceName)
                     hwid[2] = hwid[2].split("_")[0]
 
                     const wmiInfo = {
                         id: `\\\\?\\${hwid[0]}#${hwid[1]}#${hwid[2]}`,
                         key: hwid[2],
                         hwid: hwid,
-                        serial: parseWMIString(monitor.SerialNumberID)
+                        serial: Utils.parseWMIString(monitor.SerialNumberID)
                     }
 
                     if (monitor.UserFriendlyName !== null && monitor.UserFriendlyName !== "") {
-                        wmiInfo.name = parseWMIString(monitor.UserFriendlyName)
+                        wmiInfo.name = Utils.parseWMIString(monitor.UserFriendlyName)
                     }
 
                     foundMonitors[hwid[2]] = wmiInfo
@@ -1274,7 +1260,7 @@ const getBrightnessWMIC = async () => {
 
                     for (let monitor of result) {
 
-                        let hwid = readInstanceName(monitor.InstanceName)
+                        let hwid = Utils.readInstanceName(monitor.InstanceName)
                         hwid[2] = hwid[2].split("_")[0]
 
                         let wmiInfo = {
@@ -1317,9 +1303,6 @@ function wait(ms = 2000) {
     });
 }
 
-function vcpStr(code) {
-    return `0x${parseInt(code).toString(16).toUpperCase()}`
-}
 
 async function testDDCCIMethods() {
     let fastIsFine = false
