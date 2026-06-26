@@ -29,6 +29,13 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [highlightLevels, setHighlightLevels] = useState({})
   const [scheduleLocked, setScheduleLocked] = useState({ brightness: false, temperature: false, highlight: false })
   const monitorsRef = useRef({})
+  // Timestamps until which incoming warmth/highlight echoes are ignored. While a
+  // slider is being dragged, updateWarmth/updateHighlightCompression echo the
+  // value straight back via *-levels-updated; lagging echoes would clobber the
+  // local value mid-drag and make the slider rubber-band. Brightness avoids this
+  // because its echo path (refreshMonitors) is gated by pausedMonitorUpdates.
+  const colorEchoSuppress = useRef({ warmth: 0, highlight: 0 })
+  const COLOR_ECHO_SUPPRESS_MS = 1000
   const [T] = useState(new TranslateReact({}, {}))
 
   const numMonitors = useMemo(() => {
@@ -74,6 +81,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   const handleKelvinChange = (kelvin, monitor, linked = false) => {
+    colorEchoSuppress.current.warmth = Date.now() + COLOR_ECHO_SUPPRESS_MS
     if (linked || state.linkedLevelsActive) {
       const newKelvin = {}
       for (let key in state.monitors) {
@@ -131,6 +139,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   const handleHighlightChange = (weight, monitor, linked = false) => {
+    colorEchoSuppress.current.highlight = Date.now() + COLOR_ECHO_SUPPRESS_MS
     if (linked || state.linkedLevelsActive) {
       const newHighlight = {}
       for (let key in state.monitors) {
@@ -321,6 +330,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   const recievedWarmthLevels = (e) => {
+    if (Date.now() < colorEchoSuppress.current.warmth) return
     const levels = e.detail
     setKelvinLevels(prev => {
       const updated = { ...prev }
@@ -333,6 +343,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   }
 
   const recievedHighlightLevels = (e) => {
+    if (Date.now() < colorEchoSuppress.current.highlight) return
     const levels = e.detail
     setHighlightLevels(prev => {
       const updated = { ...prev }

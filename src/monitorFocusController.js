@@ -42,7 +42,10 @@ function createMonitorFocusController(deps) {
   const monitorPreDimBrightness = store.get("focus").monitorPreDimBrightness
 
   let monitorFocusInterval = null
-  let monitorFocusTransition = null
+  // Per-monitor transition intervals, keyed by monitor id. Keeping them separate
+  // means dimming a second monitor doesn't cancel the first monitor's in-flight
+  // ramp (which a single shared handle would).
+  const monitorFocusTransitions = {}
   let electronToMonitorMap = {}
   let cachedElectronDisplays = null
   let lastMonitorFocusMove = 0
@@ -75,15 +78,19 @@ function createMonitorFocusController(deps) {
     return getActiveMonitorFromPoint(cursorPoint.x, cursorPoint.y)
   }
 
-  function stopMonitorFocusTransition() {
-    if (monitorFocusTransition) {
-      clearInterval(monitorFocusTransition)
-      monitorFocusTransition = null
+  function stopMonitorFocusTransition(monitorId) {
+    if (monitorFocusTransitions[monitorId]) {
+      clearInterval(monitorFocusTransitions[monitorId])
+      delete monitorFocusTransitions[monitorId]
     }
   }
 
+  function stopAllMonitorFocusTransitions() {
+    for (const id in monitorFocusTransitions) stopMonitorFocusTransition(id)
+  }
+
   function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDim = 0) {
-    stopMonitorFocusTransition()
+    stopMonitorFocusTransition(monitor.id)
 
     const TICK_MS = 16
     const DDC_THROTTLE_MS = 50
@@ -95,7 +102,7 @@ function createMonitorFocusController(deps) {
     let lastSentSoftwareDim = startSoftwareDim
     let lastDDCWrite = 0
 
-    monitorFocusTransition = setInterval(() => {
+    monitorFocusTransitions[monitor.id] = setInterval(() => {
       const elapsed = Date.now() - startTime
       const now = startTime + elapsed
       const progress = Math.min(1, elapsed / durationMs)
@@ -122,7 +129,7 @@ function createMonitorFocusController(deps) {
           updateBrightness(monitor.id, targetBrightness, true, "brightness", false)
         }
         updateSoftwareDim(monitor.id, targetSoftwareDim)
-        stopMonitorFocusTransition()
+        stopMonitorFocusTransition(monitor.id)
         uiUpdated = true
       }
 
@@ -143,7 +150,7 @@ function createMonitorFocusController(deps) {
       preDimBrightness: monitorPreDimBrightness[monitor.id]
     })
 
-    stopMonitorFocusTransition()
+    stopMonitorFocusTransition(monitor.id)
     if (targetBrightness !== undefined) {
       updateBrightness(monitor.id, targetBrightness, true, "brightness")
       logger.debug(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
@@ -232,7 +239,7 @@ function createMonitorFocusController(deps) {
   }
 
   function stopMonitorFocusTracking() {
-    stopMonitorFocusTransition()
+    stopAllMonitorFocusTransitions()
     if (monitorFocusInterval) {
       clearInterval(monitorFocusInterval)
       monitorFocusInterval = null
@@ -240,7 +247,7 @@ function createMonitorFocusController(deps) {
   }
 
   function resetMonitorFocusState() {
-    stopMonitorFocusTransition()
+    stopAllMonitorFocusTransitions()
     for (const monitorId of monitorFocusDimmed) {
       const monitor = Object.values(monitors || {}).find(m => m.id === monitorId)
       const savedLevel = monitorPreDimBrightness[monitorId]

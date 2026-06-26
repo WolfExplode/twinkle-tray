@@ -2020,6 +2020,10 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
     for (let key in monitors) {
       const monitor = monitors[key]
       if (onlyMonitorIds && !onlyMonitorIds.includes(monitor.id)) continue
+      // Monitor Focus owns the brightness of inactive-dimmed displays via its own
+      // ramp. Stepping them here too makes both intervals write opposite targets
+      // every tick — the up/down flicker. Count as done and leave it to focus.
+      if (monitor.inactiveDimmed) { numDone++; continue }
 
       let normalized = level * 1
       if (usePerMonitorTargets) {
@@ -2073,6 +2077,10 @@ function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 
   for (let key in monitors) {
     const monitor = monitors[key]
     if (onlyMonitorIds && !onlyMonitorIds.includes(monitor.id)) continue
+    // Skip inactive-dimmed monitors — Monitor Focus owns their brightness/dim.
+    // restoreMonitorFocusBrightness reads scheduledBrightness, so a schedule change
+    // while dimmed still lands correctly on cursor return.
+    if (monitor.inactiveDimmed) continue
     let normalized = level
     let dimLevel = softwareDimLevel
     let kelvin = warmthKelvin
