@@ -77,7 +77,6 @@ const { VerticalRefreshRateContext, addDisplayChangeListener } = require("win32-
 const refreshCtx = new VerticalRefreshRateContext();
 
 const {WindowUtils, MediaStatus, PowerEvents, AppStartup, ColorGamma} = require("tt-windows-utils")
-const setWindowPos = () => { }
 const AccentColors = require("windows-accent-colors")
 const Acrylic = require("acrylic")
 
@@ -3045,10 +3044,7 @@ function getMainWindowHandle() {
 const panelAnim = createPanelAnimator({
   getMainWindow: () => mainWindow,
   settings,
-  panelSize,
-  Utils,
   refreshCtx,
-  setWindowPos,
   repositionPanel
 })
 
@@ -3061,15 +3057,8 @@ function showPanel(show = true, height = 300) {
     if (startHideTimeout) clearTimeout(startHideTimeout); // Reset "hide" timeout
     startHideTimeout = null
     mainWindow.restore()
-    let mainWindowHandle = mainWindow.getNativeWindowHandle().readInt32LE(0)
     repositionPanel()
-    let panelHeight = height
     panelSize.visible = true
-
-    panelSize.bounds = screen.dipToScreenRect(mainWindow, mainWindow.getBounds())
-    panelSize.bounds = mainWindow.getBounds()
-    let primaryDPI = screen.getPrimaryDisplay().scaleFactor
-    panelHeight = panelHeight * primaryDPI
 
     if (settings.useNativeAnimation && settings.useAcrylic && lastTheme.EnableTransparency) {
       // Acrylic + Native Animation
@@ -3078,7 +3067,7 @@ function showPanel(show = true, height = 300) {
       } else {
         tryVibrancy(mainWindow, { theme: (lastTheme && lastTheme.SystemUsesLightTheme ? (settings.useAcrylic ? "#DBDBDBDD" : "#DBDBDB70") : (settings.useAcrylic ? "#292929DD" : "#29292970")), effect: (settings.useAcrylic ? "acrylic" : "blur") })
       }
-      panelAnim.start({ panelHeight, primaryDPI, mainWindowHandle })
+      panelAnim.start()
     } else {
       // No blur, or CSS Animation
       if (settings.useAcrylic) {
@@ -3091,14 +3080,6 @@ function showPanel(show = true, height = 300) {
       } else {
         tryVibrancy(mainWindow, false)
         mainWindow.setBackgroundColor("#00000000")
-      }
-      if (panelSize.taskbar.position === "TOP") {
-        // Top
-        setWindowPos(mainWindowHandle, -2, panelSize.bounds.x * primaryDPI, ((panelSize.base) * primaryDPI), panelSize.bounds.width * primaryDPI, panelHeight, 0x0400)
-      } else {
-        // Bottom, left, right
-        mainWindow.show()
-        mainWindow.setBounds(panelSize.bounds)
       }
     }
 
