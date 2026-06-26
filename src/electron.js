@@ -1516,18 +1516,11 @@ async function getThemeRegistry() {
     const key = reg.openKey(reg.HKCU, 'Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StuckRects3', reg.Access.ALL_ACCESS);
 
     const Settings = reg.getValue(key, null, 'Settings');
-    const taskbarPos = Settings[12] * 1
-    detectedTaskbarHeight = Settings[20] * 1
-    detectedTaskbarHide = (parseInt(Settings[8]) & 1  ? true : false) // 3 = auto-hide
-
-    if (taskbarPos !== null || settings.useTaskbarRegistry) {
-      switch (taskbarPos) {
-        case 0: detectedTaskbarPos = "LEFT"; break;
-        case 1: detectedTaskbarPos = "TOP"; break;
-        case 2: detectedTaskbarPos = "RIGHT"; break;
-        case 3: detectedTaskbarPos = "BOTTOM"; break;
-      }
-    }
+    const taskbar = Utils.parseTaskbarRegistry(Settings)
+    detectedTaskbarHeight = taskbar.height
+    detectedTaskbarHide = taskbar.autoHide
+    // position is null for an unrecognised edge byte; keep the previous reading.
+    if (taskbar.position !== null) detectedTaskbarPos = taskbar.position
   } catch (e) {
     logger.debug("Couldn't access taskbar registry", e)
   }
@@ -1552,31 +1545,11 @@ function getAccentColors() {
     if (systemPreferences.getAccentColor().length == 8)
       detectedAccent = systemPreferences.getAccentColor().substr(0, 6)
   } catch (e) { logger.debug("Couldn't get accent color from registry!") }
-  const accent = Color("#" + detectedAccent, "hex")
-  const matchLumi = (color, level) => {
-    let adjusted = color.hsl()
-    adjusted.color[2] = (level * 100)
-    return adjusted
-  }
-  let adjustedAccent = accent
-  if (accent.hsl().color[2] > 60) adjustedAccent = matchLumi(accent, 0.6);
-  if (accent.hsl().color[2] < 40) adjustedAccent = matchLumi(accent, 0.4);
 
-  // Start w/ old format
-  let outColors = {
-    accent: adjustedAccent.hex(),
-    lighter: matchLumi(accent, 0.85).hex(),
-    light: matchLumi(accent, 0.52).hex(),
-    medium: matchLumi(accent, 0.48).hex(),
-    mediumDark: matchLumi(accent, 0.33).desaturate(0.1).hex(),
-    dark: matchLumi(accent, 0.275).desaturate(0.1).hex(),
-    transparent: matchLumi(accent, 0.275).desaturate(0.1).rgb().string(),
-  }
-
-  // Merge in new format
-  outColors = Object.assign(outColors, colors)
-
-  return outColors
+  // Old, luminance-clamped palette (pure logic in Utils), then merge the new
+  // native format on top.
+  const outColors = Utils.buildAccentPalette(Color, detectedAccent)
+  return Object.assign(outColors, colors)
 }
 
 function tryVibrancy(window, value = null) {

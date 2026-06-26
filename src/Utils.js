@@ -236,7 +236,9 @@ Flag to show brightness levels in the panel
     determineTheme,
     readInstanceName,
     parseWMIString,
-    isInternalURL
+    isInternalURL,
+    parseTaskbarRegistry,
+    buildAccentPalette
 }
 
 
@@ -620,6 +622,48 @@ function determineTheme(themeName, lastTheme) {
         return "light"
     } else {
         return "dark"
+    }
+}
+
+// Parse the Explorer StuckRects3 "Settings" REG_BINARY blob into taskbar state.
+// Byte offsets are fixed by the Windows shell: [12] = docked edge
+// (0=LEFT, 1=TOP, 2=RIGHT, 3=BOTTOM), [20] = thickness in px, [8] low bit =
+// auto-hide. position is null when the edge byte isn't a known value, in which
+// case the caller keeps its previous reading.
+function parseTaskbarRegistry(settingsBytes = []) {
+    const edge = settingsBytes[12] * 1
+    const positions = { 0: "LEFT", 1: "TOP", 2: "RIGHT", 3: "BOTTOM" }
+    return {
+        position: positions[edge] ?? null,
+        height: settingsBytes[20] * 1,
+        autoHide: (parseInt(settingsBytes[8]) & 1 ? true : false)
+    }
+}
+
+// Build the app's accent colour palette (old, luminance-clamped format) from a
+// 6-digit hex accent. The `color` package is injected so this stays free of a
+// hard dependency. The Windows accent can be near-black or near-white; clamp the
+// primary "accent" swatch into a usable 40-60% lightness band, then derive the
+// rest at fixed lightness steps.
+function buildAccentPalette(Color, accentHex) {
+    const accent = Color("#" + accentHex, "hex")
+    const matchLumi = (color, level) => {
+        let adjusted = color.hsl()
+        adjusted.color[2] = (level * 100)
+        return adjusted
+    }
+    let adjustedAccent = accent
+    if (accent.hsl().color[2] > 60) adjustedAccent = matchLumi(accent, 0.6);
+    if (accent.hsl().color[2] < 40) adjustedAccent = matchLumi(accent, 0.4);
+
+    return {
+        accent: adjustedAccent.hex(),
+        lighter: matchLumi(accent, 0.85).hex(),
+        light: matchLumi(accent, 0.52).hex(),
+        medium: matchLumi(accent, 0.48).hex(),
+        mediumDark: matchLumi(accent, 0.33).desaturate(0.1).hex(),
+        dark: matchLumi(accent, 0.275).desaturate(0.1).hex(),
+        transparent: matchLumi(accent, 0.275).desaturate(0.1).rgb().string(),
     }
 }
 

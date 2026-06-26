@@ -345,3 +345,49 @@ test('isInternalURL rejects external URLs and non-strings', () => {
   assert.strictEqual(Utils.isInternalURL(undefined), false)
   assert.strictEqual(Utils.isInternalURL(null), false)
 })
+
+test('parseTaskbarRegistry maps the edge byte to a position', () => {
+  const make = (edge) => { const b = []; b[8] = 0; b[12] = edge; b[20] = 40; return b }
+  assert.strictEqual(Utils.parseTaskbarRegistry(make(0)).position, "LEFT")
+  assert.strictEqual(Utils.parseTaskbarRegistry(make(1)).position, "TOP")
+  assert.strictEqual(Utils.parseTaskbarRegistry(make(2)).position, "RIGHT")
+  assert.strictEqual(Utils.parseTaskbarRegistry(make(3)).position, "BOTTOM")
+})
+
+test('parseTaskbarRegistry returns null position for an unknown edge byte', () => {
+  const b = []; b[8] = 0; b[12] = 7; b[20] = 40
+  assert.strictEqual(Utils.parseTaskbarRegistry(b).position, null)
+})
+
+test('parseTaskbarRegistry reads height from byte 20', () => {
+  const b = []; b[8] = 0; b[12] = 3; b[20] = 48
+  assert.strictEqual(Utils.parseTaskbarRegistry(b).height, 48)
+})
+
+test('parseTaskbarRegistry reads auto-hide from the low bit of byte 8', () => {
+  const b = []; b[12] = 3; b[20] = 40
+  b[8] = 3; assert.strictEqual(Utils.parseTaskbarRegistry(b).autoHide, true)   // low bit set
+  b[8] = 2; assert.strictEqual(Utils.parseTaskbarRegistry(b).autoHide, false)  // low bit clear
+  b[8] = 0; assert.strictEqual(Utils.parseTaskbarRegistry(b).autoHide, false)
+})
+
+const Color = require('color')
+
+test('buildAccentPalette clamps a near-white accent into the usable band', () => {
+  const palette = Utils.buildAccentPalette(Color, "ffffff")
+  // White has lightness 100% (>60), so the primary swatch is pulled to 60%.
+  assert.strictEqual(Color(palette.accent).hsl().color[2].toFixed(0), "60")
+})
+
+test('buildAccentPalette clamps a near-black accent up to 40%', () => {
+  const palette = Utils.buildAccentPalette(Color, "000000")
+  assert.strictEqual(Color(palette.accent).hsl().color[2].toFixed(0), "40")
+})
+
+test('buildAccentPalette leaves a mid-lightness accent unclamped and returns all swatches', () => {
+  const palette = Utils.buildAccentPalette(Color, "0078d7")
+  for (const key of ['accent', 'lighter', 'light', 'medium', 'mediumDark', 'dark', 'transparent']) {
+    assert.ok(palette[key], `missing swatch ${key}`)
+  }
+  assert.match(palette.transparent, /^rgb/)
+})
