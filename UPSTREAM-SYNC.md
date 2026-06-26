@@ -66,3 +66,78 @@ Anything above the marker is new — triage it, add rows, move the marker.
 - [ ] Add `usb` to `package.json` dependencies to actually enable the 2026
   Studio Display fallback path (`getFallbackStudioDisplays`). Upstream also
   omits it, so currently a no-op on both. Only relevant if you own that hardware.
+
+---
+
+# How this fork differs from upstream
+
+Read this **before** merging upstream. It tells you which upstream changes will
+auto-merge and which will conflict, and where the fork moved the logic so you can
+re-home an upstream change by hand. See also memory `[[electron-refactor-approach]]`.
+
+## The core architectural shift
+
+Upstream is **monolithic**: `electron.js` is one ~3k-line file holding all main-process
+logic; each `*-preload.js` holds its window's bridge logic inline; `SettingsWindow.jsx`
+is one giant component; cross-cutting state lives in module-scope globals.
+
+This fork is **modular + dependency-injected**:
+
+1. **`create*(deps)` factories** — main-process subsystems are extracted into their own
+   modules that export a `createX(deps)` factory taking injected dependencies (so they're
+   unit-testable). `electron.js` wires them together. Current factories:
+   `createDisplayColor` ([displayColor.js](src/displayColor.js)),
+   `createMonitorFocusController` ([monitorFocusController.js](src/monitorFocusController.js)),
+   `createAnalytics` ([analytics.js](src/analytics.js)),
+   `createPanelAnimator` ([panelAnimator.js](src/panelAnimator.js)),
+   `createSchedule` ([schedule.js](src/schedule.js)),
+   `createHotkeyController` ([hotkeys.js](src/hotkeys.js)),
+   `createSoftwareDim` ([softwareDim.js](src/softwareDim.js)).
+   (`electron.js` keeps its own `createPanel/createTray/createSettings` window builders.)
+2. **Central store** — [state/store.js](src/state/store.js) `createStore()` replaces scattered
+   globals. Cross-subsystem calls (e.g. displayColor ↔ monitors) route **through the store**,
+   not direct calls. Entity slices are formalised; the focus slice was evicted from the store.
+3. **Renderer bridge layer** — preload logic was lifted out of the thin `*-preload.js` files
+   into [renderer/](src/renderer/) (`panelBridge.js`, `settingsBridge.js`, `introBridge.js`,
+   `settingsApi.js`, `useSettingsBridge.js`). The preloads now just expose the bridge.
+4. **Settings page split** — `SettingsWindow.jsx` (−945 lines) was broken into per-tab
+   components under [components/settings/](src/components/settings/)
+   (`GeneralPage`, `TimePage`, `HotkeysPage`, `MonitorsPage`, `FeaturesPage`, `DebugPage`,
+   `UpdatesPage`, plus `shared.jsx`).
+5. **Tests + extracted pure logic** — `Utils.js` (+347) and new modules
+   (`adjustmentTimes.js`, `hotkeyActions.js`, `monitorTransforms.js`, `profiles.js`,
+   `updateCheck.js`, `monitorFocus.js`, `logger.js`) hold pure logic with `node --test`
+   coverage under [test/](test/). Verification gate: `node --check` changed files + `npm test`.
+6. **Native add-on** — fork adds gamma/tone-curve control to `tt-windows-utils`
+   (`windows_color_gamma.cc`, `color-temperature.js`, `display-tone-curve.js`).
+
+## Merge-risk map (upstream file → fork treatment)
+
+When upstream touches one of these, expect this outcome:
+
+| Upstream file | Fork change | Merge risk | Strategy |
+|---------------|-------------|-----------|----------|
+| `src/electron.js` | Gutted into `create*(deps)` modules (~2.4k lines moved) | 🔴 **High** | Upstream edits here rarely apply. Identify which subsystem the change belongs to, hand-port into the matching `create*` module + wire via store. |
+| `src/*-preload.js` (panel/settings/intro) | Logic moved to `renderer/*Bridge.js` | 🔴 **High** | Re-home the change into the corresponding `renderer/` bridge, not the preload. |
+| `src/components/SettingsWindow.jsx` | Split into `components/settings/*Page.jsx` | 🔴 **High** | Find the tab; apply change in that `*Page.jsx`. |
+| `src/Monitors.js` | Store-routed; focus slice evicted | 🟠 **Med** | Conflicted on this merge (Studio Display). Keep upstream logic, adapt to store + `async function` decls. |
+| `src/components/BrightnessPanel.jsx` | Heavily reworked (+330) | 🟠 **Med** | Manual review likely. |
+| `src/components/Slider.jsx` | Reworked (+113) | 🟠 **Med** | Logic still recognisable; the `de96268` 1-liner merged clean. |
+| `src/Utils.js` | +347, helpers extracted & tested | 🟠 **Med** | Check if upstream's change duplicates an already-extracted helper. |
+| `src/css/*.scss` | Minor fork tweaks | 🟢 **Low** | Usually auto-merges. |
+| `src/localization/*.json` | Untouched by fork | 🟢 **Low** | Always auto-merges — bulk-take upstream. |
+| `src/modules/**` native + `binding.gyp` | Fork added gamma module + flags | 🟢/🟠 | Additive mostly; `binding.gyp` may need both sides' flags. |
+
+**Files that exist only in the fork** (33 src + 18 test modules listed above) can never
+conflict — upstream doesn't know about them. All conflict risk is concentrated in the ~21
+files modified on both sides, and realistically in the four 🔴 monoliths upstream still edits.
+
+## Merge playbook
+
+1. `git fetch upstream && git merge upstream/master` (or triage first via the table at top).
+2. Translations + new fork-only files auto-merge — ignore them.
+3. For each conflict, consult the risk map: don't fight the textual conflict in
+   `electron.js`/preload/`SettingsWindow.jsx` — instead find where the fork **moved** that
+   logic and apply the upstream intent there.
+4. Run the gate: `node --check` each changed `.js`, then `npm test` (expect 186+ pass).
+5. Update the ledger marker + table above.
