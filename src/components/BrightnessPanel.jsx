@@ -459,35 +459,59 @@ const BrightnessPanel = memo(function BrightnessPanel() {
             }
           }
         }
-        if (lastValidMonitor) {
-          const monitor = lastValidMonitor
-          const linkedDim = softwareDim[monitor.key] ?? 0
-          const linkedLevel = (linkedDim > 0 && monitor.brightness === 0) ? -linkedDim : monitor.brightness
+        if (validMonitors.length > 0) {
           const softwareDimMin = -(window.settings?.softwareDimMax ?? 100)
 
-          // Show individual sliders for any monitor whose brightness diverges from the linked level
-          const divergedMonitors = validMonitors.length > 1 ? validMonitors.filter(m => {
+          // Compute the effective level (hardware brightness minus software dim overlay)
+          // for each monitor so we can group them.
+          const monitorLevels = validMonitors.map(m => {
             const mDim = softwareDim[m.key] ?? 0
-            const mLevel = (mDim > 0 && m.brightness === 0) ? -mDim : m.brightness
-            return mLevel !== linkedLevel
-          }) : []
+            const level = (mDim > 0 && m.brightness === 0) ? -mDim : m.brightness
+            return { monitor: m, level }
+          })
+
+          // Group monitors by level.
+          const levelGroups = new Map()
+          for (const entry of monitorLevels) {
+            if (!levelGroups.has(entry.level)) levelGroups.set(entry.level, [])
+            levelGroups.get(entry.level).push(entry)
+          }
+
+          // "All Displays" label applies when all monitors agree (any size group),
+          // or when the largest group has 2+ members. If every monitor has a unique
+          // level there is no "All Displays" row — each monitor is named individually.
+          let allDisplaysGroup = null
+          if (levelGroups.size === 1) {
+            allDisplaysGroup = monitorLevels
+          } else {
+            for (const group of levelGroups.values()) {
+              if (group.length >= 2 && (!allDisplaysGroup || group.length > allDisplaysGroup.length)) {
+                allDisplaysGroup = group
+              }
+            }
+          }
+
+          const allDisplaysLevel = allDisplaysGroup?.[0]?.level
+          const representativeMonitor = allDisplaysGroup?.[0]?.monitor
+          const namedEntries = allDisplaysGroup
+            ? monitorLevels.filter(e => !allDisplaysGroup.includes(e))
+            : monitorLevels
+          const kelvinRef = representativeMonitor ?? validMonitors[0]
 
           return (
             <>
-              <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={monitor.id} level={linkedLevel} min={softwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" ghostLevel={monitor.preDimBrightness} />
-              {renderKelvinSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_COLOR_TEMPERATURE") })}
-              {renderHighlightSlider(monitor, { linked: true, name: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION") })}
-              {divergedMonitors.length > 0 && (
+              {allDisplaysGroup && (
+                <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={representativeMonitor.id} level={allDisplaysLevel} min={softwareDimMin} max={100} num={representativeMonitor.num} monitortype={representativeMonitor.type} hwid={representativeMonitor.key} key={representativeMonitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" ghostLevel={representativeMonitor.preDimBrightness} />
+              )}
+              {renderKelvinSlider(kelvinRef, { linked: true, name: T.t("PANEL_LABEL_COLOR_TEMPERATURE") })}
+              {renderHighlightSlider(kelvinRef, { linked: true, name: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION") })}
+              {namedEntries.length > 0 && (
                 <div className="linked-diverged">
-                  {divergedMonitors.map(m => {
-                    const mDim = softwareDim[m.key] ?? 0
-                    const mLevel = (mDim > 0 && m.brightness === 0) ? -mDim : m.brightness
-                    return (
-                      <div className="monitor-sliders" key={m.key}>
-                        <Slider name={getMonitorName(m, state.names)} id={m.id} level={mLevel} min={softwareDimMin} max={100} num={m.num} monitortype={m.type} hwid={m.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" ghostLevel={m.preDimBrightness} />
-                      </div>
-                    )
-                  })}
+                  {namedEntries.map(({ monitor: m, level: mLevel }) => (
+                    <div className="monitor-sliders" key={m.key}>
+                      <Slider name={getMonitorName(m, state.names)} id={m.id} level={mLevel} min={softwareDimMin} max={100} num={m.num} monitortype={m.type} hwid={m.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" ghostLevel={m.preDimBrightness} />
+                    </div>
+                  ))}
                 </div>
               )}
             </>
