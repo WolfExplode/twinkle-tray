@@ -31,6 +31,7 @@
     "GENERIC_MINUTES": "minutes",
     "GENERIC_DDC_WARNING": "DDC/CI features can cause your monitor to become unresponsive. Use at your own risk.",
     "GENERIC_SPEED_INSTANT": "Instant",
+    "GENERIC_SPEED_LINEAR": "Linear",
     "GENERIC_SPEED_SLOW": "Slow",
     "GENERIC_SPEED_VERY_SLOW": "Very Slow",
     "GENERIC_SPEED_NORMAL": "Normal",

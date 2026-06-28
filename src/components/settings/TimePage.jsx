@@ -45,6 +45,7 @@ export default function TimePage({ self }) {
                         <option value="faster">{T.t("GENERIC_SPEED_FAST")}</option>
                         <option value="fastest">{T.t("GENERIC_SPEED_VERY_FAST")}</option>
                         <option value="instant">{T.t("GENERIC_SPEED_INSTANT")}</option>
+                        <option value="linear">{T.t("GENERIC_SPEED_LINEAR")}</option>
                     </select>
                 } />
                 <SettingsOption title={T.t("SETTINGS_TIME_STARTUP_TITLE")} description={T.t("SETTINGS_TIME_STARTUP_DESC")} input={self.renderToggle("checkTimeAtStartup")} />

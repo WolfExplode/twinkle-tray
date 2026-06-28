@@ -736,7 +736,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
           const id = monitors[key].id
           const kelvin = store.get("color").manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
           const highlightWeight = store.get("color").manualHighlightActive ? (manualHighlightLevels[id] ?? 0) : 0
-          updateDisplayColor(id, { kelvin, highlightWeight })
+          updateDisplayColor(id, { kelvin, highlightWeight }, 'schedule-active-toggle')
         }
       }
       setTrayMenu()
@@ -751,7 +751,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         for (const key in monitors) {
           const id = monitors[key].id
           const kelvin = store.get("color").manualTemperatureActive ? (manualWarmthLevels[id] ?? 6500) : 6500
-          updateDisplayColor(id, { kelvin })
+          updateDisplayColor(id, { kelvin }, 'temp-sched-toggle')
         }
       }
       setTrayStatus()
@@ -767,7 +767,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         for (const key in monitors) {
           const id = monitors[key].id
           const weight = store.get("color").manualHighlightActive ? (manualHighlightLevels[id] ?? 0) : 0
-          updateDisplayColor(id, { highlightWeight: weight })
+          updateDisplayColor(id, { highlightWeight: weight }, 'highlight-sched-toggle')
         }
       }
       setTrayStatus()
@@ -1480,7 +1480,8 @@ const displayColor = createDisplayColor({
   MonitorTransforms,
   schedule,
   settings,
-  sendToAllWindows
+  sendToAllWindows,
+  logger
 })
 const {
   manualWarmthLevels,
@@ -2113,17 +2114,17 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
         }
         updateSoftwareDim(monitors[k].id, dimLevel)
         let kelvin = warmthKelvin
-        if (usePerMonitorTargets && eventMonitorsKelvin[monitors[k].id] != null) {
+        if (settings.adjustmentTimeIndividualDisplays && eventMonitorsKelvin[monitors[k].id] != null) {
           kelvin = eventMonitorsKelvin[monitors[k].id]
         }
         let highlight = highlightWeight
-        if (usePerMonitorTargets && eventMonitorsHighlightWeight[monitors[k].id] != null) {
+        if (settings.adjustmentTimeIndividualDisplays && eventMonitorsHighlightWeight[monitors[k].id] != null) {
           highlight = eventMonitorsHighlightWeight[monitors[k].id]
         }
         const colorUpdates = {}
         if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
         if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
-        if (Object.keys(colorUpdates).length) updateDisplayColor(monitors[k].id, colorUpdates)
+        if (Object.keys(colorUpdates).length) updateDisplayColor(monitors[k].id, colorUpdates, 'transition-end')
       }
     }
   }, settings.updateInterval * transitionIntervalMult)
@@ -2144,6 +2145,8 @@ function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 
     if (settings.adjustmentTimeIndividualDisplays || onlyMonitorIds) {
       normalized = (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
       dimLevel = (eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel)
+    }
+    if (settings.adjustmentTimeIndividualDisplays) {
       if (eventMonitorsKelvin[monitor.id] != null) {
         kelvin = eventMonitorsKelvin[monitor.id]
       }
@@ -2158,7 +2161,7 @@ function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 
     const colorUpdates = {}
     if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
     if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
-    if (Object.keys(colorUpdates).length) updateDisplayColor(monitor.id, colorUpdates)
+    if (Object.keys(colorUpdates).length) updateDisplayColor(monitor.id, colorUpdates, 'transitionless')
     touchMonitors()
   }
 }
@@ -4245,7 +4248,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
     let lastTimeEvent = store.get("schedule").lastTimeEvent
 
     // Reset on new day
-    if (force || settings.adjustmentTimeAnimate || (lastTimeEvent && lastTimeEvent.day != date.getDate())) {
+    if (force || settings.adjustmentTimeAnimate || settings.adjustmentTimeSpeed === "linear" || (lastTimeEvent && lastTimeEvent.day != date.getDate())) {
       logger.debug("New day (or forced)... resetting lastTimeEvent")
       lastTimeEvent = false
       store.update("schedule", { lastTimeEvent: false })
@@ -4259,7 +4262,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
       // midnight from a 22:00 event to a 07:00 event) still apply.
       if (lastTimeEvent == false || lastTimeEvent.value !== foundEvent.value) {
 
-        if (settings.adjustmentTimeAnimate) {
+        if (settings.adjustmentTimeAnimate || settings.adjustmentTimeSpeed === "linear") {
           // If LERPing, override foundEvent with interpolated value
           const lerp = schedule.getCurrentAdjustmentEventLERP()
           if (typeof lerp === "number") {
@@ -4269,7 +4272,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           }
         }
 
-        logger.debug(`[schedule] applying event — value=${foundEvent.value} brightness=${foundEvent.brightness} instant=${instant} animate=${settings.adjustmentTimeAnimate}`)
+        logger.debug(`[schedule] applying event — value=${foundEvent.value} brightness=${foundEvent.brightness} kelvin=${foundEvent.kelvin ?? 6500} highlightWeight=${foundEvent.highlightWeight ?? 0} instant=${instant} animate=${settings.adjustmentTimeAnimate}`)
         lastTimeEvent = Object.assign({}, foundEvent)
         lastTimeEvent.day = new Date().getDate()
         store.update("schedule", { lastTimeEvent })
@@ -4308,7 +4311,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 
           // When some monitors are being skipped (inactive-dimmed), always apply instantly
           // to avoid clearing the dim animation that's running on currentTransition.
-          if (instant || settings.adjustmentTimeSpeed === "instant" || onlyMonitorIds) {
+          if (instant || settings.adjustmentTimeSpeed === "instant" || settings.adjustmentTimeSpeed === "linear" || onlyMonitorIds) {
             transitionlessBrightness(foundEvent.brightness, eventMonitors, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight, onlyMonitorIds)
           } else {
             transitionBrightness(foundEvent.brightness, eventMonitors, 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight, onlyMonitorIds)
@@ -4354,11 +4357,13 @@ function handleBackgroundUpdate(force = false) {
 
     // Sync scheduled color from current time event (respects manual tray toggles)
     if (!store.get("idle").isWindowsUserIdle && settings.adjustmentTimesActive && (settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
+      logger.debug("[color] handleBackgroundUpdate: calling applyCurrentDisplayColorEffects")
       applyCurrentDisplayColorEffects(false)
     }
 
     // Re-apply display color transforms (gamma ramps can be overwritten by the OS)
     if (!store.get("idle").isWindowsUserIdle && (store.get("color").manualTemperatureActive || store.get("color").manualHighlightActive || settings.adjustmentTimeTemperatureEnabled || settings.adjustmentTimeHighlightCompressionEnabled)) {
+      logger.debug("[color] handleBackgroundUpdate: calling showDisplayColorEffects")
       showDisplayColorEffects()
     }
   } catch (e) {

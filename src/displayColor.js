@@ -21,7 +21,8 @@ function createDisplayColor(deps) {
     MonitorTransforms,
     schedule,
     settings,
-    sendToAllWindows
+    sendToAllWindows,
+    logger
   } = deps
 
   // color slice (store-owned). The level maps (effective warmth/highlight applied
@@ -47,9 +48,17 @@ function createDisplayColor(deps) {
     return index === -1 ? null : index
   }
 
-  function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}) {
+  function updateDisplayColor(monitorId, { kelvin, highlightWeight } = {}, source = 'unknown') {
+    const prevKelvin = warmthLevels[monitorId]
+    const prevHighlight = highlightLevels[monitorId]
     if (kelvin !== undefined) warmthLevels[monitorId] = Math.max(3000, Math.min(6500, kelvin))
     if (highlightWeight !== undefined) highlightLevels[monitorId] = highlightWeight
+
+    if (logger && (kelvin !== undefined || highlightWeight !== undefined)) {
+      const kStr = kelvin !== undefined ? `kelvin: ${prevKelvin ?? 'none'} → ${warmthLevels[monitorId]}` : ''
+      const hStr = highlightWeight !== undefined ? `highlight: ${prevHighlight ?? 'none'} → ${highlightLevels[monitorId]}` : ''
+      logger.debug(`[color] updateDisplayColor [${source}] monitor=${monitorId} ${[kStr, hStr].filter(Boolean).join(', ')}`)
+    }
 
     if (store.get("idle").isWindowsUserIdle) return
 
@@ -80,14 +89,14 @@ function createDisplayColor(deps) {
     kelvin = Math.max(3000, Math.min(6500, kelvin))
     manualWarmthLevels[monitorId] = kelvin
     if (store.get("color").manualTemperatureActive) {
-      updateDisplayColor(monitorId, { kelvin })
+      updateDisplayColor(monitorId, { kelvin }, 'manual-warmth')
     }
   }
 
   function updateHighlightCompression(monitorId, weight = 0) {
     manualHighlightLevels[monitorId] = weight
     if (store.get("color").manualHighlightActive) {
-      updateDisplayColor(monitorId, { highlightWeight: weight })
+      updateDisplayColor(monitorId, { highlightWeight: weight }, 'manual-highlight')
     }
   }
 
@@ -115,6 +124,8 @@ function createDisplayColor(deps) {
     const foundEvent = schedule.getCurrentAdjustmentEvent()
     if (!foundEvent) return
 
+    if (logger) logger.debug(`[color] applyCurrentDisplayColorEffects overrideManual=${overrideManual} event.kelvin=${foundEvent.kelvin ?? 'none'} event.highlightWeight=${foundEvent.highlightWeight ?? 'none'}`)
+
     for (let key in monitors) {
       const monitor = monitors[key]
       const updates = getScheduledColorForMonitor(monitor, foundEvent)
@@ -124,7 +135,7 @@ function createDisplayColor(deps) {
         if (color.manualHighlightActive) delete updates.highlightWeight
       }
       if (Object.keys(updates).length) {
-        updateDisplayColor(monitor.id, updates)
+        updateDisplayColor(monitor.id, updates, 'schedule-color-effects')
       }
     }
   }
@@ -163,8 +174,8 @@ function createDisplayColor(deps) {
       ? (id, v) => updateWarmth(id, v)
       : (id, v) => updateHighlightCompression(id, v)
     const applyDisplay = isTemp
-      ? (id, v) => updateDisplayColor(id, { kelvin: v })
-      : (id, v) => updateDisplayColor(id, { highlightWeight: v })
+      ? (id, v) => updateDisplayColor(id, { kelvin: v }, 'toggle-off')
+      : (id, v) => updateDisplayColor(id, { highlightWeight: v }, 'toggle-off')
 
     const activeKey = isTemp ? 'manualTemperatureActive' : 'manualHighlightActive'
     const wasActive = store.get("color")[activeKey]
@@ -180,6 +191,7 @@ function createDisplayColor(deps) {
     const nowActive = !wasActive
     store.update("color", { [activeKey]: nowActive })
 
+    if (logger) logger.debug(`[color] toggleColorEffect(${type}) wasActive=${wasActive} → nowActive=${nowActive}`)
     if (nowActive) {
       for (const key in monitors) {
         const id = monitors[key].id
@@ -187,6 +199,7 @@ function createDisplayColor(deps) {
       }
     } else {
       const foundEvent = settings[scheduleKey] ? schedule.getCurrentAdjustmentEvent() : null
+      if (logger) logger.debug(`[color] toggleColorEffect(${type}) OFF: scheduleEnabled=${settings[scheduleKey]} foundEvent.${scheduledProp}=${foundEvent?.[scheduledProp] ?? 'none'} → fallback=${defaultValue}`)
       for (const key in monitors) {
         const monitor = monitors[key]
         const updates = foundEvent ? getScheduledColorForMonitor(monitor, foundEvent) : {}
