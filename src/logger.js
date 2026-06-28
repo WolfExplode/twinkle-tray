@@ -75,7 +75,7 @@ function format(arg) {
 function write(level, args) {
   if (LEVELS[level] < config.threshold) return
 
-  const ts = new Date().toISOString()
+  const ts = new Date().toISOString().slice(11, 23)
   const body = args.map(format).join(' ')
   const line = `${ts} [${level.toUpperCase()}] ${body}`
 

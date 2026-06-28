@@ -149,7 +149,7 @@ export default class Slider extends Component {
         const disabled = this.props.disabled === true
         const lockedTitle = this.props.lockedTitle
         return (
-            <div className="monitor-item" onWheel={disabled ? undefined : this.handleWheel} title={disabled && lockedTitle ? lockedTitle : undefined}>
+            <div className="monitor-item" onWheel={disabled ? undefined : this.handleWheel} title={lockedTitle || undefined}>
                 {this.getName()}
                 <div className="input--range" data-height={this.props.height} data-software-dim={hasSoftwareDim && level < 0 ? "active" : undefined} data-locked={disabled || undefined}>
                     <div className="rangeGroup">

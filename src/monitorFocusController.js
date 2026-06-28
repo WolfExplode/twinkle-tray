@@ -61,7 +61,7 @@ function createMonitorFocusController(deps) {
   function buildElectronMonitorMap() {
     const displays = (cachedElectronDisplays || (cachedElectronDisplays = screen.getAllDisplays()))
     electronToMonitorMap = MonitorFocus.buildMonitorMap(displays, Object.values(monitors || {}))
-    logger.debug(`\x1b[36mBuilt monitor focus map: ${JSON.stringify(electronToMonitorMap)}\x1b[0m`)
+    logger.debug(`[monitorFocus] built monitor map: ${JSON.stringify(electronToMonitorMap)}`)
   }
 
   function getActiveMonitorFromPoint(x, y) {
@@ -120,7 +120,7 @@ function createMonitorFocusController(deps) {
         const dimToApply = progress >= 1 ? targetSoftwareDim : currentSoftwareDim
         updateSoftwareDim(monitor.id, dimToApply)
         if (Math.round(dimToApply) !== Math.round(lastSentSoftwareDim)) {
-          logger.debug(`[monitorFocus] softwareDim [${monitor.id}] [ ${lastSentBrightness - Math.round(dimToApply)}, 100 ]`)
+          logger.debug(`[monitorFocus] dim step [${monitor.id}] hw=${lastSentBrightness} softwareDim=${Math.round(dimToApply)}`)
         }
         lastSentSoftwareDim = currentSoftwareDim
         uiUpdated = true
@@ -156,7 +156,7 @@ function createMonitorFocusController(deps) {
     stopMonitorFocusTransition(monitor.id)
     if (targetBrightness !== undefined) {
       updateBrightness(monitor.id, targetBrightness, true, "brightness")
-      logger.debug(`\x1b[36mRestored monitor focus brightness for ${monitor.id} → ${targetBrightness - targetSoftwareDim} (scheduleActive=${scheduleActive})\x1b[0m`)
+      logger.debug(`[monitorFocus] restored [${monitor.id}] → ${targetBrightness - targetSoftwareDim} (scheduleActive=${scheduleActive})`)
     }
     updateSoftwareDim(monitor.id, targetSoftwareDim)
     monitorFocusDimmed.delete(monitor.id)
@@ -216,7 +216,7 @@ function createMonitorFocusController(deps) {
       const currentSoftwareDim = softwareDimLevels[monitor.id] || 0
       if (!MonitorFocus.shouldDimMonitor({ now, lastVisited, timeout, brightness: monitor.brightness, dimLevel, currentSoftwareDim, softwareDimTarget })) {
         // Already at or below the dim target — applying it would raise brightness.
-        logger.debug(`\x1b[36mSkipping inactive dim for ${monitor.id} — already at or below dim target\x1b[0m`)
+        logger.debug(`[monitorFocus] skipping dim [${monitor.id}] — already at or below dim target`)
         continue
       }
       monitorPreDimBrightness[monitor.id] = monitor.brightness
@@ -224,7 +224,7 @@ function createMonitorFocusController(deps) {
       monitorFocusDimmed.add(monitor.id)
       monitor.inactiveDimmed = true
       applyMonitorFocusTransition(monitor, dimLevel, softwareDimTarget)
-      logger.debug(`\x1b[36mDimming inactive monitor ${monitor.id}\x1b[0m`)
+      logger.debug(`[monitorFocus] dimming inactive monitor ${monitor.id}`)
     }
   }
 
@@ -240,7 +240,7 @@ function createMonitorFocusController(deps) {
     enableMouseEvents()
     pauseMouseEvents(false)
     monitorFocusInterval = setInterval(checkMonitorFocus, 2000)
-    logger.debug(`\x1b[36mStarted monitor focus tracking.\x1b[0m`)
+    logger.debug(`[monitorFocus] started tracking`)
   }
 
   function stopMonitorFocusTracking() {
@@ -271,13 +271,52 @@ function createMonitorFocusController(deps) {
   // Drop inactive-dim state without restoring brightness — used on idle wake,
   // where the idle-restore path already sets the correct brightness and only the
   // leftover software-dim overlays and the timeout windows need clearing.
+  // Monitors the cursor is NOT on are still inactive, so we preserve their dim
+  // state to avoid a redundant re-animation after every idle wake.
   function clearDimmedStateAfterIdle() {
-    for (const monitorId of monitorFocusDimmed) {
-      logger.debug(`[monitorFocus] clearDimmedStateAfterIdle — clearing softwareDim for ${monitorId}`)
-      updateSoftwareDim(monitorId, 0)
+    const activeMonitor = getActiveMonitorFromCursor()
+    const activeId = activeMonitor?.id
+
+    for (const monitorId of [...monitorFocusDimmed]) {
+      if (monitorId === activeId) {
+        // Cursor is here — idle restore already applied brightness, clear dim state.
+        logger.debug(`[monitorFocus] clearDimmedStateAfterIdle — clearing softwareDim for ${monitorId} (active)`)
+        updateSoftwareDim(monitorId, 0)
+        const monitor = Object.values(monitors || {}).find(m => m.id === monitorId)
+        if (monitor) { delete monitor.inactiveDimmed; delete monitor.preDimBrightness }
+        delete monitorPreDimBrightness[monitorId]
+        monitorFocusDimmed.delete(monitorId)
+      } else {
+        // Cursor not here — monitor still inactive, preserve dim state.
+        // checkMonitorFocus skips it (already in monitorFocusDimmed), no re-animation.
+        logger.debug(`[monitorFocus] clearDimmedStateAfterIdle — preserving dim for ${monitorId} (still inactive)`)
+      }
     }
-    clearMonitorFocusMaps()
-    monitorFocusDimmed.clear()
+
+    // Reset last-visited timestamps for non-dimmed monitors so their timeout
+    // windows start fresh after idle. Preserved-dim monitors keep their timestamps
+    // (checkMonitorFocus skips them via the monitorFocusDimmed guard anyway).
+    for (const k in monitorLastVisited) {
+      if (!monitorFocusDimmed.has(k)) delete monitorLastVisited[k]
+    }
+  }
+
+  // Called when the user manually sets brightness on a monitor. Resets the
+  // inactive-dim countdown and clears any active dim state — the manual write
+  // already applied the correct brightness so no restore is needed.
+  function notifyInteraction(monitorId) {
+    monitorLastVisited[monitorId] = Date.now()
+    if (!monitorFocusDimmed.has(monitorId)) return
+    logger.debug(`[monitorFocus] interaction cleared dim [${monitorId}]`)
+    const monitor = Object.values(monitors || {}).find(m => m.id === monitorId)
+    if (monitor) {
+      delete monitor.inactiveDimmed
+      delete monitor.preDimBrightness
+    }
+    delete monitorPreDimBrightness[monitorId]
+    monitorFocusDimmed.delete(monitorId)
+    updateSoftwareDim(monitorId, 0)
+    touchMonitors()
   }
 
   return {
@@ -287,6 +326,7 @@ function createMonitorFocusController(deps) {
     reset: resetMonitorFocusState,
     invalidateDisplayCache,
     clearDimmedStateAfterIdle,
+    notifyInteraction,
     // Inactive-dim queries for external priority logic (schedule apply).
     isAnyDimmed: () => monitorFocusDimmed.size > 0,
     isDimmed: (monitorId) => monitorFocusDimmed.has(monitorId),

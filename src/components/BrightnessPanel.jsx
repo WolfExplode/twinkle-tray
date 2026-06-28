@@ -114,7 +114,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
         onChange={(val) => handleKelvinChange(val, linked ? null : monitor, linked)}
         scrollAmount={window.settings?.scrollFlyoutAmount}
         disabled={locked}
-        lockedTitle="Overridden by schedule"
+        lockedTitle={locked ? "Overridden by schedule" : undefined}
       />
     )
     if (extended) {
@@ -172,7 +172,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
         onChange={(val) => handleHighlightChange(val, linked ? null : monitor, linked)}
         scrollAmount={window.settings?.scrollFlyoutAmount}
         disabled={locked}
-        lockedTitle="Overridden by schedule"
+        lockedTitle={locked ? "Overridden by schedule" : undefined}
       />
     )
     if (extended) {
@@ -501,7 +501,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
           return (
             <>
               {allDisplaysGroup && (
-                <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={representativeMonitor.id} level={allDisplaysLevel} min={softwareDimMin} max={100} num={representativeMonitor.num} monitortype={representativeMonitor.type} hwid={representativeMonitor.key} key={representativeMonitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle="Overridden by schedule" ghostLevel={representativeMonitor.preDimBrightness} />
+                <Slider name={T.t("GENERIC_ALL_DISPLAYS")} id={representativeMonitor.id} level={allDisplaysLevel} min={softwareDimMin} max={100} num={representativeMonitor.num} monitortype={representativeMonitor.type} hwid={representativeMonitor.key} key={representativeMonitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={representativeMonitor.preDimBrightness} />
               )}
               {renderKelvinSlider(kelvinRef, { linked: true, name: T.t("PANEL_LABEL_COLOR_TEMPERATURE") })}
               {renderHighlightSlider(kelvinRef, { linked: true, name: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION") })}
@@ -509,7 +509,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                 <div className="linked-diverged">
                   {namedEntries.map(({ monitor: m, level: mLevel }) => (
                     <div className="monitor-sliders" key={m.key}>
-                      <Slider name={getMonitorName(m, state.names)} id={m.id} level={mLevel} min={softwareDimMin} max={100} num={m.num} monitortype={m.type} hwid={m.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness || !!m.inactiveDimmed} lockedTitle={m.inactiveDimmed ? "Overridden by inactive monitor dim" : "Overridden by schedule"} ghostLevel={m.preDimBrightness} />
+                      <Slider name={getMonitorName(m, state.names)} id={m.id} level={mLevel} min={softwareDimMin} max={100} num={m.num} monitortype={m.type} hwid={m.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={m.inactiveDimmed ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={m.preDimBrightness} />
                     </div>
                   ))}
                 </div>
@@ -613,7 +613,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                 const monSoftwareDimMin = -(window.settings?.softwareDimMax ?? 100)
                 return (
                   <div className="monitor-sliders" key={monitor.key}>
-                    <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness || !!monitor.inactiveDimmed} lockedTitle={monitor.inactiveDimmed ? "Overridden by inactive monitor dim" : "Overridden by schedule"} ghostLevel={monitor.preDimBrightness} />
+                    <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={monitor.inactiveDimmed ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={monitor.preDimBrightness} />
                     {renderKelvinSlider(monitor)}
                     {renderHighlightSlider(monitor)}
                   </div>
@@ -636,7 +636,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                       return (
                         <div className="feature-row feature-brightness">
                           <div className="feature-icon"><span className="icon vfix">&#xE706;</span></div>
-                          <Slider id={monitor.id} level={extLevel} min={extSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness || !!monitor.inactiveDimmed} lockedTitle={monitor.inactiveDimmed ? "Overridden by inactive monitor dim" : "Overridden by schedule"} ghostLevel={monitor.preDimBrightness} />
+                          <Slider id={monitor.id} level={extLevel} min={extSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={monitor.inactiveDimmed ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={monitor.preDimBrightness} />
                         </div>
                       )
                     })()}

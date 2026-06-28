@@ -999,7 +999,7 @@ async function updateKnownDisplays(force = false, immediate = false) {
 
       // Write back to file
       fs.writeFileSync(knownDisplaysPath, JSON.stringify(known))
-      logger.debug(`\x1b[36mSaved known displays!\x1b[0m`)
+      logger.debug(`[profile] saved known displays`)
     } catch (e) {
       logger.error("Couldn't update known displays file.")
     }
@@ -1532,7 +1532,7 @@ function broadcastThemeSettings() {
 }
 
 async function getThemeRegistry() {
-  logger.debug("Function: getThemeRegistry");
+  logger.debug("[theme] getThemeRegistry");
 
   broadcastThemeSettings()
 
@@ -1969,7 +1969,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
             code: parseInt(vcp),
             value: parseInt(level)
           })
-          logger.debug(`monitors-updated [${monitor.id}]`, monitor.features?.[vcpString])
+          logger.debug(`[vcp] set ${vcpString} [${monitor.id}]`, monitor.features?.[vcpString])
           
         } catch(e) {
           logger.debug(`Couldn't set VCP code ${vcpString} for monitor ${monitor.id}`, e)
@@ -2000,6 +2000,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
 
     setTrayStatus()
     updateKnownDisplays()
+    return monitor.id
   } catch (e) {
     debug.error("Could not update brightness", e)
   }
@@ -2043,6 +2044,11 @@ function updateAllBrightness(brightness, mode = "offset") {
   // Send brightness updates
   for (let key in monitors) {
     updateBrightnessThrottle(monitors[key].id, monitors[key].brightness, true, false)
+  }
+
+  // Manual write — reset inactive-dim state and timer for every monitor
+  for (let key in monitors) {
+    if (monitors[key].id) monitorFocus?.notifyInteraction(monitors[key].id)
   }
 }
 
@@ -2255,7 +2261,8 @@ ipcMain.on('request-colors', () => {
 
 ipcMain.on('update-brightness', function (event, data) {
   setRecentlyInteracted(true)
-  updateBrightness(data.index, data.level)
+  const monitorId = updateBrightness(data.index, data.level)
+  if (monitorId) monitorFocus.notifyInteraction(monitorId)
 
   // If overlay is visible, keep it open
   if (hotkeyOverlayTimeout) {
@@ -2488,9 +2495,9 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
 
   applyNavigationGuards(mainWindow)
 
-  mainWindow.on("closed", () => { logger.debug("~~~~~ MAIN WINDOW CLOSED ~~~~~~"); mainWindow = null });
-  mainWindow.on("minimize", () => { logger.debug("~~~~~ MAIN WINDOW MINIMIZED ~~~~~~") });
-  mainWindow.on("restore", () => { logger.debug("~~~~~ MAIN WINDOW RESTORED ~~~~~~") });
+  mainWindow.on("closed", () => { logger.debug("[panel] closed"); mainWindow = null });
+  mainWindow.on("minimize", () => { logger.debug("[panel] minimized") });
+  mainWindow.on("restore", () => { logger.debug("[panel] restored") });
 
   mainWindow.once('ready-to-show', () => {
     if (mainWindow) {
@@ -2634,7 +2641,7 @@ function currentOverlayType() {
   if(!overlayType || overlayType == "normal") {
     overlayType = settings.defaultOverlayType
   }
-  logger.debug(`overlayType: ${overlayType}`)
+  if (overlayType && overlayType !== "normal") logger.debug(`[panel] overlayType: ${overlayType}`)
   return overlayType
 }
 
@@ -2664,9 +2671,9 @@ function destroyPanel() {
 
 let restartingPanel = false
 function restartPanel(show = false) {
-  logger.debug("Function: restartPanel");
+  logger.debug("[panel] restartPanel");
   if(restartingPanel) {
-    logger.debug("Function: restartPanel: already restarting")
+    logger.debug("[panel] restartPanel: already restarting")
     return false
   }
   restartingPanel = true
@@ -3148,7 +3155,7 @@ app.on("ready", async () => {
     isStartupGracePeriod = true
     setTimeout(() => {
       isStartupGracePeriod = false
-      logger.debug("Startup grace period ended")
+      logger.debug("[startup] grace period ended")
     }, 30000) // 30 seconds grace period
   
     setTimeout(addEventListeners, 5000)
@@ -3829,7 +3836,7 @@ let handleAccentChangeTimeout = false
 function handleAccentChange() {
   if (handleAccentChangeTimeout) clearTimeout(handleAccentChangeTimeout);
   handleAccentChangeTimeout = setTimeout(async () => {
-    logger.debug("Event: handleAccentChange");
+    logger.debug("[event] handleAccentChange");
     sendToAllWindows('update-colors', getAccentColors())
     await getThemeRegistry()
     setTimeout(sendMicaWallpaper, 100)
@@ -3848,7 +3855,7 @@ let handleChangeTimeout0
 let handleChangeTimeout1
 let handleChangeTimeout2
 function handleMonitorChange(t, e, d) {
-  logger.debug(`Event: handleMonitorChange (${t})`);
+  logger.debug(`[event] handleMonitorChange (${t})`);
 
   // Skip event that happens at startup
   if (!skipFirstMonChange) {
@@ -3947,7 +3954,7 @@ powerMonitor.on("resume", () => {
 })
 
 function handleMetricsChange(type) {
-  logger.debug(`Event: handleMetricsChange (${type})`);
+  logger.debug(`[event] handleMetricsChange (${type})`);
 
   const block = blockBadDisplays("handleMetricsChange")
 
@@ -4107,7 +4114,9 @@ function idleCheckShort() {
         const transitionMonitors = {}
         Object.values(monitors)?.forEach((monitor) => {
           if(!shouldSkipDisplay(monitor, true)) {
-            monitor.preDimBrightness = monitor.brightness
+            monitor.preDimBrightness = (settings.monitorFocusEnabled && monitorFocus?.isDimmed(monitor.id))
+              ? (monitorFocus.getPreDimBrightness(monitor.id) ?? monitor.brightness)
+              : monitor.brightness
             if(settings.idleTransitionSpeed) {
               transitionMonitors[monitor.id] = idleBrightness
             } else {
@@ -4137,10 +4146,13 @@ function idleCheckShort() {
       clearInterval(notIdleMonitor)
       notIdleMonitor = false
 
-      // Clear idle software dim and ghost markers
+      // Clear idle software dim and ghost markers. Skip monitors still inactive-dimmed
+      // by monitorFocus — their dim state will be preserved by clearDimmedStateAfterIdle.
       Object.values(monitors).forEach((monitor) => {
         delete monitor.preDimBrightness
-        if (settings.detectIdleSoftwareDim > 0) updateSoftwareDim(monitor.id, 0)
+        if (settings.detectIdleSoftwareDim > 0 && !(settings.monitorFocusEnabled && monitorFocus?.isDimmed(monitor.id))) {
+          updateSoftwareDim(monitor.id, 0)
+        }
       })
 
       // Different behavior depending on if idle dimming is on
@@ -4344,8 +4356,6 @@ store.update("schedule", {
   }
 })
 function handleBackgroundUpdate(force = false) {
-  logger.debug("Event: handleBackgroundUpdate");
-
   try {
     // Wallpaper updates
     sendMicaWallpaper()

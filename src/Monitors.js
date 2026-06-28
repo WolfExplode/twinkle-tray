@@ -131,7 +131,7 @@ process.on('message', async (data) => {
             })
         }
     } catch (e) {
-        console.log(e)
+        console.log("process.on message handler failed:", e)
     }
 })
 
@@ -229,7 +229,7 @@ async function refreshMonitors(fullRefresh = false, ddcciType = "default", alway
                 try {
                     startTime = process.hrtime.bigint()
                     monitorsAppleStudio = await getStudioDisplay(monitors);
-                    console.log(`getStudioDisplay() Total: ${(startTime - process.hrtime.bigint()) / BigInt(-1000000)}ms`)
+                    console.log(`getStudioDisplay() [refreshMonitors] Total: ${(startTime - process.hrtime.bigint()) / BigInt(-1000000)}ms`)
                 } catch (e) {
                     console.log("\x1b[41m" + "getStudioDisplay() failed!" + "\x1b[0m", e)
                 }
@@ -256,7 +256,7 @@ async function refreshMonitors(fullRefresh = false, ddcciType = "default", alway
 
         }
     } catch (e) {
-        console.log(e)
+        console.log("refreshMonitors() failed:", e)
     } finally {
         busyLevel = 0
     }
@@ -323,14 +323,14 @@ async function getAllMonitors(ddcciMethod = "default") {
         try {
             startTime = process.hrtime.bigint()
             monitorsAppleStudio = await getStudioDisplay(foundMonitors);
-            console.log(`getStudioDisplay() Total: ${(startTime - process.hrtime.bigint()) / BigInt(-1000000)}ms`)
+            console.log(`getStudioDisplay() [getAllMonitors] Total: ${(startTime - process.hrtime.bigint()) / BigInt(-1000000)}ms`)
         } catch (e) {
             console.log("\x1b[41m" + "getStudioDisplay() failed!" + "\x1b[0m", e)
         }
     } else {
         console.log("getStudioDisplay() skipped due to previous failure.")
     }
-    
+
 
     // DDC/CI Brightness + Features
     try {
@@ -395,7 +395,7 @@ async function getAllMonitors(ddcciMethod = "default") {
         try {
             startTime = process.hrtime.bigint()
             monitorsAppleStudio = await getStudioDisplay(foundMonitors);
-            console.log(`getStudioDisplay() Total: ${(startTime - process.hrtime.bigint()) / BigInt(-1000000)}ms`)
+            console.log(`getStudioDisplay() [getFeaturesDDC] Total: ${(startTime - process.hrtime.bigint()) / BigInt(-1000000)}ms`)
         } catch (e) {
             console.log("\x1b[41m" + "getStudioDisplay() failed!" + "\x1b[0m", e)
         }
@@ -921,9 +921,9 @@ async function checkMonitorFeatures(monitor, skipCache = false, ddcciMethod = "a
             }
 
 
-            
+
         } catch (e) {
-            console.log(e)
+            console.log("checkMonitorFeatures() failed for", monitor, e)
         }
         resolve(features)
     })
@@ -983,7 +983,7 @@ function getBrightnessWMI() {
                 resolve(wmiInfo)
             }
         } catch (e) {
-            console.log(e)
+            console.log("getBrightnessWMI() failed:", e)
             resolve(false)
         }
     })
@@ -1082,7 +1082,7 @@ function updateDisplay(monitors, hwid2, info = {}) {
 function setSDRBrightness(brightness, id) {
     if(settings.disableHDR) return false;
     try {
-        console.log("sdr", brightness, id)
+        console.log(`[hdr] setSDRBrightness [${id}] ${brightness}%`)
         return hdr.setSDRBrightness(id, (brightness * 0.01 * 400) + 80)
     } catch(e) {
         console.log(`Couldn't update SDR brightness! [${id}]`, e);
@@ -1235,18 +1235,18 @@ async function getHighLevelBrightness(monitor) {
         let result = ddcci._getHighLevelBrightness(monitor)
         return result
     } catch (e) {
-        console.log(e)
+        console.log("getHighLevelBrightness() failed for", monitor, e)
         return false
     }
 }
 
 async function setHighLevelBrightness(monitor, value) {
-    if(busyLevel > 0) while(busyLevel > 0) { await wait(100) } // Wait until no longer busy   
+    if(busyLevel > 0) while(busyLevel > 0) { await wait(100) } // Wait until no longer busy
     try {
         let result = ddcci._setHighLevelBrightness(monitor, value)
         return result
     } catch (e) {
-        console.log(e)
+        console.log("setHighLevelBrightness() failed for", monitor, e)
         return false
     }
 }
@@ -1432,7 +1432,7 @@ const getBrightnessWMIC = async () => {
             });
 
         } catch (e) {
-            console.log(e)
+            console.log("getBrightnessWMIC() failed:", e)
             resolve(false)
         }
     })
