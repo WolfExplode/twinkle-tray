@@ -153,6 +153,20 @@
         opacity: 0.7;
     }
 
+    // Ghost marker: shows parked brightness while idle/inactive dim is active
+    .ghost-marker {
+        position: absolute;
+        top: 50%;
+        width: 2px;
+        height: 10px;
+        margin-top: -5px;
+        transform: translateX(-50%);
+        background: var(--tray-text);
+        border-radius: 1px;
+        pointer-events: none;
+        opacity: 0.3;
+    }
+
     // Number display turns muted when in the software dim zone
     &[data-software-dim="active"] .val {
         opacity: 0.55;
@@ -354,6 +368,11 @@ body[data-is-win11="true"]:not(.ignoreWin11) {
         }
 
         .dim-zone-marker {
+            height: 12px;
+            margin-top: -6px;
+        }
+
+        .ghost-marker {
             height: 12px;
             margin-top: -6px;
         }

@@ -156,6 +156,7 @@ function createMonitorFocusController(deps) {
     updateSoftwareDim(monitor.id, targetSoftwareDim)
     monitorFocusDimmed.delete(monitor.id)
     delete monitor.inactiveDimmed
+    delete monitor.preDimBrightness
     delete monitorPreDimBrightness[monitor.id]
     touchMonitors()
     return true
@@ -214,6 +215,7 @@ function createMonitorFocusController(deps) {
         continue
       }
       monitorPreDimBrightness[monitor.id] = monitor.brightness
+      monitor.preDimBrightness = monitor.brightness
       monitorFocusDimmed.add(monitor.id)
       monitor.inactiveDimmed = true
       applyMonitorFocusTransition(monitor, dimLevel, softwareDimTarget)
@@ -252,6 +254,7 @@ function createMonitorFocusController(deps) {
       if (monitor) {
         if (savedLevel !== undefined) updateBrightness(monitorId, savedLevel, true, "brightness")
         delete monitor.inactiveDimmed
+        delete monitor.preDimBrightness
       }
       updateSoftwareDim(monitorId, 0)
     }

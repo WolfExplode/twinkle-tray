@@ -98,6 +98,16 @@ export default class Slider extends Component {
         return { left: left + '%', width: width + '%' }
     }
 
+    // Position of the ghost marker showing parked brightness before idle/inactive dim
+    ghostMarkerStyle = () => {
+        const min = (this.props.min || 0) * 1
+        const max = (this.props.max || 100) * 1
+        const ghostLevel = this.props.ghostLevel
+        if (ghostLevel == null) return null
+        const pos = (ghostLevel - min) / (max - min) * 100
+        return { left: pos + '%' }
+    }
+
     // Progress fill for the software-dim zone (thumb → 0-mark), used when min < 0 and level < 0
     softwareDimProgressStyle = () => {
         const min = (this.props.min || 0) * 1
@@ -152,6 +162,9 @@ export default class Slider extends Component {
                             </>
                         ) : (
                             <div className="progress" style={this.progressStyle()}></div>
+                        )}
+                        {this.props.ghostLevel != null && (
+                            <div className="ghost-marker" style={this.ghostMarkerStyle()}></div>
                         )}
                     </div>
                     <input

@@ -635,6 +635,7 @@ function readSettings(doProcessSettings = true) {
   if (changed) persistSettings()
 
   if (doProcessSettings) processSettings({ isReadSettings: true });
+  logSettingsSnapshot("settings:load")
 }
 
 readSettings(false)
@@ -721,6 +722,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.adjustmentTimesActive !== undefined) {
       tempSettings.pauseTimeAdjustments = !settings.adjustmentTimesActive
+      logSettingsSnapshot("settings:change")
       if (settings.adjustmentTimesActive) {
         store.update("schedule", { lastTimeEvent: false })
         applyCurrentAdjustmentEvent(true, true)
@@ -835,6 +837,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
 
     if (newSettings.detectIdleTimeEnabled === true || newSettings.detectIdleTimeEnabled === false) {
       rebuildTray = true
+      logSettingsSnapshot("settings:change")
     }
 
     if (newSettings.monitorFocusEnabled !== undefined) {
@@ -844,6 +847,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
         monitorFocus.stop()
         monitorFocus.reset()
       }
+      logSettingsSnapshot("settings:change")
     }
 
     if (newSettings.windowsStyle !== undefined) {
@@ -936,6 +940,16 @@ function processSettings(newSettings = {}, sendUpdate = true) {
   if (shouldRefreshMonitors) {
     refreshMonitors(true, true)
   }
+}
+
+function logSettingsSnapshot(label = "settings") {
+  const idleThresholdSecs = parseInt(settings.detectIdleTimeSeconds || 0) + (settings.detectIdleTimeMinutes || 0) * 60
+  logger.debug(
+    `[${label}]` +
+    ` idle=${settings.detectIdleTimeEnabled} threshold=${idleThresholdSecs}s idleBrightness=${settings.detectIdleBrightness}` +
+    ` | schedule=${settings.adjustmentTimesActive} pause=${tempSettings.pauseTimeAdjustments} animate=${settings.adjustmentTimeAnimate} individualDisplays=${settings.adjustmentTimeIndividualDisplays} events=${settings.adjustmentTimes?.length ?? 0}` +
+    ` | monitorFocus=${settings.monitorFocusEnabled}`
+  )
 }
 
 // Check if given display should be skipped during brightness update
@@ -1057,7 +1071,10 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
     for (const hwid in profile) {
       try {
         const monitor = profile[hwid]
-        if(shouldSkipDisplay(monitor)) continue;
+        if(shouldSkipDisplay(monitor)) {
+          logger.debug(`[applyProfile] skipping ${monitor.id} (shouldSkipDisplay)`)
+          continue;
+        }
 
         // Apply brightness to valid display types
         if (monitor.type == "wmi" || monitor.type == "studio-display" || (monitor.type == "ddcci" && monitor.brightnessType)) {
@@ -1065,7 +1082,10 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
           if(settings.sdrAsMainSliderDisplays?.[monitor.key] && monitor.hdr === "active") {
             monitor.brightness = monitor.sdrLevel
           }
+          logger.debug(`[applyProfile] ${monitor.id} → brightness=${monitor.brightness}`)
           updateBrightness(monitor.id, monitor.brightness)
+        } else {
+          logger.debug(`[applyProfile] ${monitor.id} skipped — type=${monitor.type} brightnessType=${monitor.brightnessType}`)
         }
       } catch (e) { logger.debug("Couldn't set brightness for known display!") }
     }
@@ -1936,7 +1956,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
             code: parseInt(vcp),
             value: parseInt(level)
           })
-          logger.debug('monitors-updated', monitor.features?.[vcpString])
+          logger.debug(`monitors-updated [${monitor.id}]`, monitor.features?.[vcpString])
           
         } catch(e) {
           logger.debug(`Couldn't set VCP code ${vcpString} for monitor ${monitor.id}`, e)
@@ -2041,7 +2061,12 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
     : Object.keys(monitors).length
 
   currentTransition = setInterval(() => {
-    if (store.get("power").recentlyWokeUp || store.get("idle").isWindowsUserIdle) clearInterval(currentTransition);
+    if (store.get("power").recentlyWokeUp || store.get("idle").isWindowsUserIdle) {
+      clearInterval(currentTransition);
+      currentTransition = null;
+      return;
+    }
+
     let numDone = 0
     for (let key in monitors) {
       const monitor = monitors[key]
@@ -2051,49 +2076,42 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
       // every tick — the up/down flicker. Count as done and leave it to focus.
       if (monitor.inactiveDimmed) { numDone++; continue }
 
-      let normalized = level * 1
-      if (usePerMonitorTargets) {
-        normalized = (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
-      }
+      const normalized = usePerMonitorTargets
+        ? (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
+        : level
 
-      if (settings.remaps) {
-        for (let remapName in settings.remaps) {
-          if (remapName == monitor.name) {
-            normalized = normalized
-          }
-        }
-      }
-      if (monitor.brightness < normalized + (step + 1) && monitor.brightness > normalized - (step + 1)) {
+      if (monitor.brightness < normalized + step + 1 && monitor.brightness > normalized - step - 1) {
         updateBrightness(monitor.id, normalized, undefined, undefined, false)
         numDone++
       } else {
-        updateBrightness(monitor.id, (monitor.brightness < normalized ? monitor.brightness + step : monitor.brightness - step), undefined, undefined, false)
+        updateBrightness(monitor.id, monitor.brightness < normalized ? monitor.brightness + step : monitor.brightness - step, undefined, undefined, false)
       }
-      touchMonitors()
-      if (numDone === targetMonitorCount) {
-        clearInterval(currentTransition);
-        currentTransition = null
-        // Apply software dim and display color once transition reaches the target
-        for (let k in monitors) {
-          if (onlyMonitorIds && !onlyMonitorIds.includes(monitors[k].id)) continue
-          let dimLevel = softwareDimLevel
-          if (usePerMonitorTargets) {
-            dimLevel = (eventMonitorsSoftwareDim[monitors[k].id] >= 0 ? eventMonitorsSoftwareDim[monitors[k].id] : softwareDimLevel)
-          }
-          updateSoftwareDim(monitors[k].id, dimLevel)
-          let kelvin = warmthKelvin
-          if (usePerMonitorTargets && eventMonitorsKelvin[monitors[k].id] != null) {
-            kelvin = eventMonitorsKelvin[monitors[k].id]
-          }
-          let highlight = highlightWeight
-          if (usePerMonitorTargets && eventMonitorsHighlightWeight[monitors[k].id] != null) {
-            highlight = eventMonitorsHighlightWeight[monitors[k].id]
-          }
-          const colorUpdates = {}
-          if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
-          if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
-          if (Object.keys(colorUpdates).length) updateDisplayColor(monitors[k].id, colorUpdates)
+    }
+    touchMonitors()
+
+    if (numDone === targetMonitorCount) {
+      clearInterval(currentTransition);
+      currentTransition = null
+      // Apply software dim and display color once transition reaches the target
+      for (let k in monitors) {
+        if (onlyMonitorIds && !onlyMonitorIds.includes(monitors[k].id)) continue
+        let dimLevel = softwareDimLevel
+        if (usePerMonitorTargets) {
+          dimLevel = (eventMonitorsSoftwareDim[monitors[k].id] >= 0 ? eventMonitorsSoftwareDim[monitors[k].id] : softwareDimLevel)
         }
+        updateSoftwareDim(monitors[k].id, dimLevel)
+        let kelvin = warmthKelvin
+        if (usePerMonitorTargets && eventMonitorsKelvin[monitors[k].id] != null) {
+          kelvin = eventMonitorsKelvin[monitors[k].id]
+        }
+        let highlight = highlightWeight
+        if (usePerMonitorTargets && eventMonitorsHighlightWeight[monitors[k].id] != null) {
+          highlight = eventMonitorsHighlightWeight[monitors[k].id]
+        }
+        const colorUpdates = {}
+        if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
+        if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
+        if (Object.keys(colorUpdates).length) updateDisplayColor(monitors[k].id, colorUpdates)
       }
     }
   }, settings.updateInterval * transitionIntervalMult)
@@ -3021,6 +3039,69 @@ app.on("ready", async () => {
   screen.on("display-removed", monitorFocus.invalidateDisplayCache)
   screen.on("display-metrics-changed", monitorFocus.invalidateDisplayCache)
 
+  if (isDev) {
+    const http = require('http')
+    const debugServer = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://localhost')
+      res.setHeader('Content-Type', 'application/json')
+
+      if (req.method === 'GET' && url.pathname === '/debug/state') {
+        res.end(JSON.stringify({
+          idle: store.get('idle'),
+          schedule: store.get('schedule'),
+          debugIdleTimeOverride,
+          notIdleMonitorActive: !!notIdleMonitor,
+          settings: {
+            adjustmentTimesActive: settings.adjustmentTimesActive,
+            adjustmentTimeAnimate: settings.adjustmentTimeAnimate,
+            adjustmentTimes: (settings.adjustmentTimes ?? []).map(e => ({ time: e.time, brightness: e.brightness })),
+            detectIdleTimeEnabled: settings.detectIdleTimeEnabled,
+            detectIdleTimeSeconds: settings.detectIdleTimeSeconds,
+            detectIdleTimeMinutes: settings.detectIdleTimeMinutes,
+            idleRestoreSeconds: settings.idleRestoreSeconds,
+          },
+        }, null, 2))
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/debug/idle') {
+        const seconds = parseInt(url.searchParams.get('seconds') ?? '300')
+        debugIdleTimeOverride = seconds
+        logger.debug(`[debug-server] idle time forced to ${seconds}s`)
+        res.end(JSON.stringify({ ok: true, debugIdleTimeOverride }))
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/debug/wake') {
+        debugIdleTimeOverride = 0
+        logger.debug(`[debug-server] idle time forced to 0 (wake)`)
+        res.end(JSON.stringify({ ok: true, debugIdleTimeOverride: 0 }))
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/debug/clear-override') {
+        debugIdleTimeOverride = null
+        logger.debug(`[debug-server] idle time override cleared`)
+        res.end(JSON.stringify({ ok: true, debugIdleTimeOverride: null }))
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/debug/apply-schedule') {
+        const force = url.searchParams.get('force') !== 'false'
+        logger.debug(`[debug-server] apply-schedule force=${force}`)
+        const result = applyCurrentAdjustmentEvent(force, true)
+        res.end(JSON.stringify({ ok: true, foundEvent: result || null }))
+        return
+      }
+
+      res.statusCode = 404
+      res.end(JSON.stringify({ error: 'not found' }))
+    })
+    debugServer.listen(13579, '127.0.0.1', () => {
+      logger.debug('[debug-server] listening on http://127.0.0.1:13579 — use scripts/debug-cli.js to control')
+    })
+  }
+
   await getAllLanguages()
   await getThemeRegistry()
   getLocalization()
@@ -3930,6 +4011,13 @@ function restartBackgroundUpdate() {
 store.update("idle", { isUserIdle: false, userIdleDimmed: false, isWindowsUserIdle: false, lastIdleTime: 0 })
 let idleMonitorBlock
 
+// Dev-mode override: set to a number to fake powerMonitor.getSystemIdleTime().
+// null = use the real value. Controlled via the debug HTTP server (port 13579).
+let debugIdleTimeOverride = null
+function getSystemIdleTime() {
+  return debugIdleTimeOverride !== null ? debugIdleTimeOverride : powerMonitor.getSystemIdleTime()
+}
+
 let idleMonitor = setInterval(idleCheckLong, 5000)
 let notIdleMonitor
 // lastIdleTime now lives in the "idle" store slice (seeded above)
@@ -3941,19 +4029,29 @@ function getIdleSettingValue() {
 
 function idleCheckLong() {
   if (tempSettings.pauseIdleDetection) return false;
-  const idleTime = powerMonitor.getSystemIdleTime()
+  const idleTime = getSystemIdleTime()
   store.update("idle", { lastIdleTime: idleTime })
-  if (idleTime >= (settings.detectIdleTimeEnabled ? getIdleSettingValue() : 180) && !notIdleMonitor) {
+  const idleThreshold = settings.detectIdleTimeEnabled ? getIdleSettingValue() : 180
+  if (idleTime >= idleThreshold && !notIdleMonitor) {
+    if (store.get("idle").isUserIdle) {
+      logger.debug(`[idle:long] ⚠ double-start: isUserIdle already true, notIdleMonitor=${!!notIdleMonitor} — race in startIdleCheckShort await?`)
+    }
+    logger.debug(`[idle:long] idleTime=${idleTime}s >= threshold=${idleThreshold}s — triggering short monitor`)
     startIdleCheckShort()
   }
 }
 
 async function startIdleCheckShort() {
+  logger.debug(`[idle:start-short] called — isUserIdle=${store.get("idle").isUserIdle} notIdleMonitor=${!!notIdleMonitor}`)
+  if (store.get("idle").isUserIdle) {
+    logger.debug(`[idle:start-short] ⚠ double-start: concurrent call while first is still awaiting updateKnownDisplays — leaked interval risk`)
+  }
   store.update("idle", { isUserIdle: true })
   await updateKnownDisplays(true, true)
-  logger.debug(`\x1b[36mStarted short idle monitor.\x1b[0m`)
+  logger.debug(`[idle:start-short] updateKnownDisplays done — notIdleMonitor=${!!notIdleMonitor} (if true, previous leaked)`)
   if (notIdleMonitor) clearInterval(notIdleMonitor);
   notIdleMonitor = setInterval(idleCheckShort, 1000)
+  logger.debug(`[idle:start-short] short monitor started`)
 }
 
 function isFocusedWindowFullscreen() {
@@ -3981,10 +4079,10 @@ function isMediaPlaying() {
 
 function idleCheckShort() {
   try {
-    const idleTime = powerMonitor.getSystemIdleTime()
+    const idleTime = getSystemIdleTime()
 
     if (!store.get("idle").userIdleDimmed && settings.detectIdleTimeEnabled && !settings.disableAutoApply && idleTime >= getIdleSettingValue() && !isFocusedWindowFullscreen() && !isMediaPlaying()) {
-      logger.debug(`\x1b[36mUser idle. Dimming displays.\x1b[0m`)
+      logger.debug(`[idle:short] dim trigger — idleTime=${idleTime}s threshold=${getIdleSettingValue()}s fullscreen=${isFocusedWindowFullscreen()} media=${isMediaPlaying()}`)
       store.update("idle", { userIdleDimmed: true })
       idleMonitorBlock?.release?.()
       idleMonitorBlock = blockBadDisplays("idle:start")
@@ -3994,6 +4092,7 @@ function idleCheckShort() {
         const transitionMonitors = {}
         Object.values(monitors)?.forEach((monitor) => {
           if(!shouldSkipDisplay(monitor, true)) {
+            monitor.preDimBrightness = monitor.brightness
             if(settings.idleTransitionSpeed) {
               transitionMonitors[monitor.id] = idleBrightness
             } else {
@@ -4019,14 +4118,15 @@ function idleCheckShort() {
     const lastIdleTime = store.get("idle").lastIdleTime
     if (store.get("idle").isUserIdle && (idleTime < lastIdleTime || idleTime < getIdleSettingValue())) {
       // Wake up
-      logger.debug(`\x1b[36mUser no longer idle after ${lastIdleTime} seconds.\x1b[0m`)
+      logger.debug(`[idle:short] wake — idleTime=${idleTime}s lastIdleTime=${lastIdleTime}s threshold=${getIdleSettingValue()}s userIdleDimmed=${store.get("idle").userIdleDimmed}`)
       clearInterval(notIdleMonitor)
       notIdleMonitor = false
 
-      // Clear idle software dim
-      if (settings.detectIdleSoftwareDim > 0) {
-        Object.values(monitors).forEach((monitor) => updateSoftwareDim(monitor.id, 0))
-      }
+      // Clear idle software dim and ghost markers
+      Object.values(monitors).forEach((monitor) => {
+        delete monitor.preDimBrightness
+        if (settings.detectIdleSoftwareDim > 0) updateSoftwareDim(monitor.id, 0)
+      })
 
       // Different behavior depending on if idle dimming is on
       if (settings.detectIdleTimeEnabled) {
@@ -4041,6 +4141,7 @@ function idleCheckShort() {
       }
 
       idleMonitorBlock?.release?.()
+      idleMonitorBlock = null
 
       // Wait a little longer, re-apply known brightness in case monitors take a moment, and finish up
       setTimeout(() => {
@@ -4116,8 +4217,14 @@ const monitorFocus = createMonitorFocusController({
 // If applicable, apply the current Time of Day Adjustment
 function applyCurrentAdjustmentEvent(force = false, instant = true) {
   try {
-    if (tempSettings.pauseTimeAdjustments || !settings.adjustmentTimesActive || store.get("profile").currentProfile?.setBrightness) return false;
-    if (settings.adjustmentTimes.length === 0 || store.get("idle").userIdleDimmed) return false;
+    if (tempSettings.pauseTimeAdjustments || !settings.adjustmentTimesActive || store.get("profile").currentProfile?.setBrightness) {
+      logger.debug(`[schedule] applyCurrentAdjustmentEvent blocked — pause=${tempSettings.pauseTimeAdjustments} active=${settings.adjustmentTimesActive} profileOverride=${!!store.get("profile").currentProfile?.setBrightness}`)
+      return false;
+    }
+    if (settings.adjustmentTimes.length === 0 || store.get("idle").userIdleDimmed) {
+      logger.debug(`[schedule] applyCurrentAdjustmentEvent blocked — times=${settings.adjustmentTimes.length} userIdleDimmed=${store.get("idle").userIdleDimmed}`)
+      return false;
+    }
 
     const date = new Date()
 
@@ -4134,6 +4241,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
 
     // Find most recent event
     const foundEvent = schedule.getCurrentAdjustmentEvent()
+    logger.debug(`[schedule] foundEvent=${foundEvent ? `value=${foundEvent.value} brightness=${foundEvent.brightness}` : 'none'} lastTimeEvent=${lastTimeEvent ? `value=${lastTimeEvent.value}` : 'false'} force=${force}`)
     if (foundEvent) {
       // Use !== (not <) so transitions that decrease in value (e.g. crossing
       // midnight from a 22:00 event to a 07:00 event) still apply.
@@ -4149,7 +4257,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           }
         }
 
-        logger.debug("Adjusting brightness automatically", foundEvent)
+        logger.debug(`[schedule] applying event — value=${foundEvent.value} brightness=${foundEvent.brightness} instant=${instant} animate=${settings.adjustmentTimeAnimate}`)
         lastTimeEvent = Object.assign({}, foundEvent)
         lastTimeEvent.day = new Date().getDate()
         store.update("schedule", { lastTimeEvent })
@@ -4173,6 +4281,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
               ? eventMonitorsSoftwareDim[monitor.id]
               : eventSoftwareDim
             scheduledBrightness[monitor.id] = { brightness, softwareDim }
+            logger.debug(`[schedule] target ${monitor.id} → brightness=${brightness} softwareDim=${softwareDim}`)
           }
 
           // Skip monitors that are currently inactive-dimmed — they will pick up the new
@@ -4180,6 +4289,10 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           const onlyMonitorIds = monitorFocus.isAnyDimmed()
             ? Object.values(monitors).map(m => m.id).filter(id => !monitorFocus.isDimmed(id))
             : null
+          if (onlyMonitorIds) {
+            const skipped = Object.values(monitors).map(m => m.id).filter(id => monitorFocus.isDimmed(id))
+            logger.debug(`[schedule] focus-dimmed monitors present — applying to [${onlyMonitorIds.join(', ')}], skipping [${skipped.join(', ')}]`)
+          }
 
           // When some monitors are being skipped (inactive-dimmed), always apply instantly
           // to avoid clearing the dim animation that's running on currentTransition.
