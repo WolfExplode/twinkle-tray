@@ -289,7 +289,8 @@ function createMonitorFocusController(deps) {
     clearDimmedStateAfterIdle,
     // Inactive-dim queries for external priority logic (schedule apply).
     isAnyDimmed: () => monitorFocusDimmed.size > 0,
-    isDimmed: (monitorId) => monitorFocusDimmed.has(monitorId)
+    isDimmed: (monitorId) => monitorFocusDimmed.has(monitorId),
+    getPreDimBrightness: (monitorId) => monitorPreDimBrightness[monitorId]
   }
 }
 

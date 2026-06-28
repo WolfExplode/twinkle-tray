@@ -1758,12 +1758,16 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     for (const k in monitors) delete monitors[k]
     Object.assign(monitors, newMonitors)
 
-    // Re-stamp softwareDim from the overlay level map — newMonitors from the
-    // monitor thread has no softwareDim, so the property would be lost here and
-    // the tray slider would display 0 while the overlay is still active.
+    // Re-stamp softwareDim and preDimBrightness — newMonitors from the monitor
+    // thread has neither (both are pure-software state), so they would be lost
+    // here and the tray slider/ghost-marker would display stale 0 values while
+    // the focus-dim overlay is still active.
     for (const k in monitors) {
-      const dim = softwareDimLevels[monitors[k].id]
+      const id = monitors[k].id
+      const dim = softwareDimLevels[id]
       if (dim) monitors[k].softwareDim = dim
+      const preDim = monitorFocus.getPreDimBrightness(id)
+      if (preDim !== undefined) monitors[k].preDimBrightness = preDim
     }
 
     // Only send update if something changed
