@@ -948,7 +948,7 @@ function logSettingsSnapshot(label = "settings") {
     `[${label}]` +
     ` idle=${settings.detectIdleTimeEnabled} threshold=${idleThresholdSecs}s idleBrightness=${settings.detectIdleBrightness}` +
     ` | schedule=${settings.adjustmentTimesActive} pause=${tempSettings.pauseTimeAdjustments} animate=${settings.adjustmentTimeAnimate} individualDisplays=${settings.adjustmentTimeIndividualDisplays} events=${settings.adjustmentTimes?.length ?? 0}` +
-    ` | monitorFocus=${settings.monitorFocusEnabled}`
+    ` | monitorFocus=${settings.monitorFocusEnabled} timeout=${(settings.monitorFocusMinutes||0)*60+(settings.monitorFocusSeconds||0)}s dimLevel=${settings.monitorFocusDimLevel} softwareDim=${settings.monitorFocusSoftwareDim} transition=${settings.monitorFocusTransitionDuration}ms`
   )
 }
 
@@ -1082,7 +1082,7 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
           if(settings.sdrAsMainSliderDisplays?.[monitor.key] && monitor.hdr === "active") {
             monitor.brightness = monitor.sdrLevel
           }
-          logger.debug(`[applyProfile] ${monitor.id} → brightness=${monitor.brightness}`)
+          logger.debug(`[applyProfile] ${monitor.id} → ${monitor.brightness - (monitor.softwareDim || 0)}`)
           updateBrightness(monitor.id, monitor.brightness)
         } else {
           logger.debug(`[applyProfile] ${monitor.id} skipped — type=${monitor.type} brightnessType=${monitor.brightnessType}`)
@@ -1757,6 +1757,14 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     // Replace contents in place so the store-owned `monitors` reference stays stable.
     for (const k in monitors) delete monitors[k]
     Object.assign(monitors, newMonitors)
+
+    // Re-stamp softwareDim from the overlay level map — newMonitors from the
+    // monitor thread has no softwareDim, so the property would be lost here and
+    // the tray slider would display 0 while the overlay is still active.
+    for (const k in monitors) {
+      const dim = softwareDimLevels[monitors[k].id]
+      if (dim) monitors[k].softwareDim = dim
+    }
 
     // Only send update if something changed
     if (JSON.stringify(newMonitors) !== JSON.stringify(oldMonitors)) {
@@ -4281,7 +4289,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
               ? eventMonitorsSoftwareDim[monitor.id]
               : eventSoftwareDim
             scheduledBrightness[monitor.id] = { brightness, softwareDim }
-            logger.debug(`[schedule] target ${monitor.id} → brightness=${brightness} softwareDim=${softwareDim}`)
+            logger.debug(`[schedule] target ${monitor.id} → ${brightness - softwareDim}`)
           }
 
           // Skip monitors that are currently inactive-dimmed — they will pick up the new

@@ -117,7 +117,11 @@ function createMonitorFocusController(deps) {
       }
 
       if (startSoftwareDim !== targetSoftwareDim) {
-        updateSoftwareDim(monitor.id, progress >= 1 ? targetSoftwareDim : currentSoftwareDim)
+        const dimToApply = progress >= 1 ? targetSoftwareDim : currentSoftwareDim
+        updateSoftwareDim(monitor.id, dimToApply)
+        if (Math.round(dimToApply) !== Math.round(lastSentSoftwareDim)) {
+          logger.debug(`[monitorFocus] softwareDim [${monitor.id}] [ ${lastSentBrightness - Math.round(dimToApply)}, 100 ]`)
+        }
         lastSentSoftwareDim = currentSoftwareDim
         uiUpdated = true
       }
@@ -127,6 +131,7 @@ function createMonitorFocusController(deps) {
           updateBrightness(monitor.id, targetBrightness, true, "brightness", false)
         }
         updateSoftwareDim(monitor.id, targetSoftwareDim)
+        logger.debug(`[monitorFocus] transition done ${monitor.id} → ${targetBrightness - targetSoftwareDim}`)
         stopMonitorFocusTransition(monitor.id)
         uiUpdated = true
       }
@@ -151,7 +156,7 @@ function createMonitorFocusController(deps) {
     stopMonitorFocusTransition(monitor.id)
     if (targetBrightness !== undefined) {
       updateBrightness(monitor.id, targetBrightness, true, "brightness")
-      logger.debug(`\x1b[36mRestored monitor focus brightness for ${monitor.id}\x1b[0m`)
+      logger.debug(`\x1b[36mRestored monitor focus brightness for ${monitor.id} → ${targetBrightness - targetSoftwareDim} (scheduleActive=${scheduleActive})\x1b[0m`)
     }
     updateSoftwareDim(monitor.id, targetSoftwareDim)
     monitorFocusDimmed.delete(monitor.id)
@@ -268,6 +273,7 @@ function createMonitorFocusController(deps) {
   // leftover software-dim overlays and the timeout windows need clearing.
   function clearDimmedStateAfterIdle() {
     for (const monitorId of monitorFocusDimmed) {
+      logger.debug(`[monitorFocus] clearDimmedStateAfterIdle — clearing softwareDim for ${monitorId}`)
       updateSoftwareDim(monitorId, 0)
     }
     clearMonitorFocusMaps()
