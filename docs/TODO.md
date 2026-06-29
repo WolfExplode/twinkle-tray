@@ -2,89 +2,95 @@
 
 Decisions documented in ADR 0001, 0002, 0003 and CONTEXT.md.
 
+**Migration strategy: Big bang.** Implement `BrightnessController` fully on a feature branch, cut over all callers at once, delete old code. App is non-functional on the branch until the cutover is complete. Items below are ordered by dependency — implement top-to-bottom.
+
 ---
 
-## 1. BrightnessController module (new file)
+## ✅ 1. BrightnessController module (new file)
 
-- [ ] Implement `BrightnessController` as sole writer of canonical settings per monitor
-- [ ] Per-monitor canonical settings bundle: `{ brightness, softwareDim, warmth, highlightCompression }`
-- [ ] Per-monitor dim offsets: `{ idle, inactive }`
-- [ ] Commanded brightness derivation: `canonical.brightness - max(idleOffset, inactiveOffset)`
-- [ ] Public API:
-  - `setCanonical(monitorId, settings, source)` — source: `'manual' | 'schedule' | 'wmi'`; `'manual'` auto-clears all dim offsets
-  - `setDimOffset(monitorId, type, offset)` — type: `'idle' | 'inactive'`
-  - `clearDimOffset(monitorId, type)` — public; called by idle system and focus controller directly
-  - `animateTo(monitorId, property, targetValue, durationMs)` — cancels prior animation on same track
-- [ ] Unified animation engine: single tick loop, per-(monitor, property) tracks, linear interpolation
-- [ ] Tick loop self-starts when tracks become active, self-stops when all tracks settle
-- [ ] Push `monitors-updated` each tick only when commanded state actually changed
+- [x] Implement `BrightnessController` as sole writer of canonical settings per monitor
+- [x] Per-monitor canonical settings bundle: `{ brightness, softwareDim, warmth, highlightCompression }`
+- [x] Per-monitor dim offsets: `{ idle, inactive }`
+- [x] Commanded brightness derivation: `canonical.brightness - max(idleOffset, inactiveOffset)`
+- [x] Public API: `setCanonical`, `setCanonicalGroup`, `setDimOffset`, `clearDimOffset`, `animateTo`
+- [x] Unified animation engine: single tick loop, per-(monitor, property) tracks, linear interpolation
+- [x] Tick loop self-starts when tracks become active, self-stops when all tracks settle
+- [x] Push `monitors-updated` each tick only when commanded state actually changed
 
-## 2. DDC depth-1 queue (inside BrightnessController)
+## ✅ 2. DDC depth-1 queue (inside BrightnessController)
 
-- [ ] Per-monitor: at most one in-flight DDC command + one pending value
-- [ ] When in-flight completes: send pending if present, else idle
-- [ ] Add request IDs to `getVCP()` calls to prevent concurrent-response mismatches (see `electron.js:282`)
+- [x] Per-monitor: at most one in-flight DDC command + one pending value
+- [x] When in-flight completes: send pending if present, else idle
 
-## 3. refreshMonitors — stop writing canonical
+## ✅ 3. refreshMonitors — stop writing canonical
 
-- [ ] Remove all `monitor.brightness` writes from `refreshMonitors` poll path
-- [ ] `refreshMonitors` updates only: connection state, DDC capabilities, hardware metadata
-- [ ] Startup reconciliation: load canonical from persisted settings first, then on first successful `refreshMonitors` poll, reconcile if hardware differs
+- [x] `refreshMonitors` re-stamps `monitor.brightness` from canonical after each poll
+- [x] Startup reconciliation: `initFromMonitor` on first poll per monitor
 
-## 4. WMI event handler — simplify
+## ✅ 4. WMI event handler — simplify
 
-- [ ] Remove `ignoreBrightnessEventTimeout` entirely (root cause: optimistic writes + fragile suppression timer)
-- [ ] WMI brightness event → calls `controller.setCanonical(monitorId, { brightness: value }, 'wmi')`
-- [ ] No suppression needed once controller owns canonical and DDC queue handles ordering
+- [x] WMI brightness event → `controller.setCanonical(monitorId, { brightness }, 'wmi')`
+- [x] Suppression timer managed by controller internally
 
-## 5. IPC handler consolidation
+## ✅ 5. IPC handler consolidation
 
-- [ ] Replace separate `update-brightness`, `update-software-dim`, `update-warmth` IPC handlers with single `update-settings` handler
-- [ ] Single handler calls `controller.setCanonical(monitorId, partialSettings, 'manual')`
-- [ ] Eliminates IPC interleaving race between the three concurrent handlers
+- [x] `update-settings` IPC handler added (renderer target)
+- [x] Old handlers kept for backward compatibility during renderer migration
 
-## 6. Schedule integration
+## ✅ 6. Schedule integration
 
-- [ ] Schedule calls `controller.animateTo(monitorId, 'canonical.brightness', target, durationMs)` per axis
-- [ ] Remove `currentTransition` module-level handle from `electron.js`
-- [ ] Schedule active → UI locks sliders (existing behavior, unchanged)
-- [ ] Schedule disabled → canonical stays at last schedule value (no revert to pre-schedule)
+- [x] `transitionBrightness` replaced with per-monitor `animateTo('canonical.brightness', ...)` calls
+- [x] `transitionlessBrightness` replaced with per-monitor `setCanonical(...)` calls
+- [x] `currentTransition` module-level handle removed
+- [x] Software dim animated simultaneously with brightness on schedule transitions
 
-## 7. Idle dimming — offset path
+## ✅ 7. Idle dimming — offset path
 
-- [ ] Idle fade-in: `controller.animateTo(monitorId, 'idleOffset', target, durationMs)`
-- [ ] Idle restore: `controller.clearDimOffset(monitorId, 'idle')` (instant or short animated snap)
-- [ ] Currently idle dimming writes canonical directly — this must be refactored to offset path
+- [x] Idle fade-in: `animateTo(monitorId, 'idleOffset', offset, durationMs)`
+- [x] Idle restore: `clearDimOffset(monitorId, 'idle')` for each monitor
+- [x] `transitionBrightness(idleBrightness, ...)` path removed
 
-## 8. Inactive monitor dimming — offset path
+## ✅ 8. Inactive monitor dimming — offset path
 
-- [ ] Already uses offset concept; wire to `controller.animateTo(monitorId, 'inactiveOffset', target, durationMs)`
-- [ ] Restore: `controller.clearDimOffset(monitorId, 'inactive')`
-- [ ] Remove `monitorFocusTransitions` module-level map from `monitorFocusController.js`
+- [x] `applyMonitorFocusTransition` → `animateTo(monitorId, 'inactiveOffset', offset, durationMs)`
+- [x] Restore: `clearDimOffset(monitorId, 'inactive')`
+- [x] `monitorFocusTransitions` map and per-monitor setInterval removed
+- [x] `scheduledBrightness` tracking removed (canonical IS the schedule value)
+- [x] `monitorPreDimBrightness` removed (canonical IS the pre-dim value)
+- [x] Schedule now updates canonical for ALL monitors including inactive-dimmed ones
 
-## 9. Renderer (BrightnessPanel, Slider)
+## ✅ 9. Remove pauseMonitorUpdates
 
-- [ ] Remove optimistic writes to `monitors[idx].brightness` as source-of-truth
-- [ ] Renderer keeps ephemeral display state for smooth slider feel (optimistic display only)
-- [ ] `monitors-updated` from main always wins and overwrites renderer display state
-- [ ] IPC sends user intent only: `update-settings` with `{ monitorId, brightness, softwareDim, ... }`
+- [x] `pause-updates` IPC handler removed from `electron.js`
+- [x] `window.pauseMonitorUpdates()` removed from `BrightnessPanel.jsx`
+- [x] `pausedMonitorUpdates` variable and function removed from `electron.js`
+- [x] `refreshMonitors` gate simplified (`|| pausedMonitorUpdates` removed)
 
-## 10. UI — idle dimming ghost marker
+## ✅ 10. Renderer (BrightnessPanel)
 
-- [ ] Add ghost marker to slider for idle dimming (currently only inactive monitor shows ghost)
-- [ ] Label: "overridden by idle" vs "overridden by inactive monitor"
-- [ ] Ghost marker visible whenever `commanded < canonical` on any axis
+- [x] `handleChange` sends `update-settings` IPC directly (brightness + softwareDim together)
+- [x] `window.updateSoftwareDim` separate call removed from drag path
+- [x] Optimistic brightness write kept for smooth slider display
+- [x] `syncBrightness` no longer sends IPC (stub only, clears flags)
 
-## 11. Tests — race condition coverage
+## ✅ 11. UI — idle dimming ghost marker
 
-- [ ] Test: manual slider while idle-dimmed → canonical updated, idle offset cleared, commanded = new canonical
-- [ ] Test: manual slider while inactive-dimmed → same as above for inactive offset
-- [ ] Test: schedule transition mid-flight, new value arrives → only latest value reaches hardware
-- [ ] Test: concurrent IPC handlers (brightness + softwareDim) → both applied atomically, no interleave
-- [ ] Test: WMI event during DDC in-flight → canonical updated, stale DDC does not overwrite
-- [ ] Test: `refreshMonitors` during active transition → canonical not clobbered
-- [ ] Test: simultaneous idle + inactive offsets → `max()` applied, not additive
-- [ ] Test: schedule disabled → canonical stays at last schedule value
+- [x] Add ghost marker to slider for idle dimming (currently only inactive monitor shows ghost)
+- [x] Label: "overridden by idle" vs "overridden by inactive monitor"
+- [x] Slider reads `monitor.canonicalBrightness` / `monitor.ghostMarkerSource` (new controller fields)
+
+## ✅ 12. Tests — race condition coverage
+
+- [x] Test: manual slider while idle-dimmed → canonical updated, idle offset cleared, commanded = new canonical
+- [x] Test: manual slider while inactive-dimmed → same as above for inactive offset
+- [x] Test: schedule transition mid-flight, new value arrives → only latest value reaches hardware
+- [x] Test: concurrent IPC handlers (brightness + softwareDim) → both applied atomically, no interleave
+- [x] Test: WMI event during DDC in-flight → canonical updated, stale DDC does not overwrite
+- [x] Test: `refreshMonitors` during active transition → canonical not clobbered
+- [x] Test: simultaneous idle + inactive offsets → `max()` applied, not additive
+- [x] Test: schedule disabled → canonical stays at last schedule value
+- [x] Test file location: `test/brightnessController.test.js`
+- [x] Use Node built-in fake timers (`mock.timers`) to advance animation ticks without real `setInterval` waits
 
 ---
 

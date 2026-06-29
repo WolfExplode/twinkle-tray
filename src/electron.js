@@ -21,6 +21,7 @@ const isPortable = (app.name == "twinkle-tray-portable" ? true : false)
 const Utils = require("./Utils")
 const AdjustmentTimes = require("./adjustmentTimes")
 const { createMonitorFocusController } = require("./monitorFocusController")
+const { createBrightnessController } = require("./BrightnessController")
 const { createAnalytics } = require("./analytics")
 const { createPanelAnimator } = require("./panelAnimator")
 const { createSoftwareDim } = require("./softwareDim")
@@ -45,14 +46,14 @@ const logger = require('./logger') // init()'d in the Logging block below once l
 //      store.update/get/subscribe. (settings, panel, idle, updates, theme, mica,
 //      power, profile, …) This is where new shared state should go.
 //   2. Store, entity slice — a live collection mutated in place on hot paths,
-//      announced via store.touch/onTouch (monitors.all, schedule.scheduledBrightness,
+//      announced via store.touch/onTouch (monitors.all,
 //      color.softwareDimLevels). See store.js for the two-shape contract.
 //   3. Runtime handles / mechanism — NOT state, never migrates: window handles
 //      (mainWindow, tray, settingsWindow, introWindow), worker/IPC handles
 //      (monitorsThread, mouseEvents), the Translate instance (T), and the many
 //      setTimeout/setInterval handles. These stay module-global on purpose.
 //   4. Not-yet-migrated control flags — local booleans/timestamps that gate flow
-//      (skipFirstMonChange, isStartupGracePeriod, pausedMonitorUpdates,
+//      (skipFirstMonChange, isStartupGracePeriod,
 //      lastRefreshMonitors, detectedTaskbarPos/Height/Hide, micaBusy, …). These
 //      are the remaining migration surface; fold them into a slice when their
 //      feature's slice is next touched, rather than in a big-bang sweep.
@@ -364,7 +365,6 @@ function enableMouseEvents() {
             hotkeyOverlayStart(undefined, true)
           }
 
-          pauseMonitorUpdates() // Pause monitor updates to prevent judder
           willPauseMouseEvents() // Delay pausing mouse events
 
         }
@@ -1110,7 +1110,6 @@ const hotkeyController = createHotkeyController({
   minMax: Utils.minMax,
   touchMonitors,
   updateBrightnessThrottle,
-  pauseMonitorUpdates,
   writeSettings,
   sleepDisplays,
   setRecentlyInteracted,
@@ -1499,6 +1498,21 @@ const {
   toggleHighlightCompression
 } = displayColor
 
+const brightnessController = createBrightnessController({
+  monitors,
+  monitorsThread,
+  store,
+  settings,
+  touchMonitors,
+  updateKnownDisplays,
+  setTrayStatus,
+  shouldSkipDisplay,
+  updateSoftwareDim,
+  updateDisplayColor,
+  Utils,
+  logger,
+})
+
 ipcMain.on('send-settings', (event, data) => {
   logger.debug("Recieved new settings", data.newSettings)
   writeSettings(data.newSettings, true, data.sendUpdate)
@@ -1679,7 +1693,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     return monitors
   }
 
-  if (monitorsThreadStatus !== "ready" || pausedMonitorUpdates) {
+  if (monitorsThreadStatus !== "ready") {
     logger.debug("Sorry, no updates right now!")
     return monitors
   }
@@ -1759,16 +1773,35 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
     for (const k in monitors) delete monitors[k]
     Object.assign(monitors, newMonitors)
 
-    // Re-stamp softwareDim and preDimBrightness — newMonitors from the monitor
-    // thread has neither (both are pure-software state), so they would be lost
-    // here and the tray slider/ghost-marker would display stale 0 values while
-    // the focus-dim overlay is still active.
+    // Re-stamp pure-software state that the monitor thread doesn't know about.
+    // The thread returns hardware state only; overlays and canonical brightness
+    // are owned by the main process and must survive the monitor map replace.
     for (const k in monitors) {
       const id = monitors[k].id
+
+      // Software dim overlay level
       const dim = softwareDimLevels[id]
       if (dim) monitors[k].softwareDim = dim
-      const preDim = monitorFocus.getPreDimBrightness(id)
-      if (preDim !== undefined) monitors[k].preDimBrightness = preDim
+
+      if (brightnessController.hasCanonical(id)) {
+        // Canonical already set (normal runtime) — re-stamp brightness from
+        // controller so the poll can't overwrite what the user set.
+        const commanded = brightnessController.getCommandedBrightness(id)
+        const c = brightnessController.getCanonical(id)
+        monitors[k].brightness = commanded
+        monitors[k].canonicalBrightness = c.brightness
+        monitors[k].ghostMarkerActive = commanded < c.brightness
+        monitors[k].ghostMarkerSource = brightnessController.getGhostSource(id)
+      } else {
+        // First poll for this monitor — seed canonical from hardware-reported value.
+        brightnessController.initFromMonitor(id, {
+          brightness:           monitors[k].brightness,
+          softwareDim:          monitors[k].softwareDim ?? 0,
+          warmth:               6500,
+          highlightCompression: 0,
+        })
+      }
+
     }
 
     // Only send update if something changed
@@ -1791,11 +1824,6 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
 }
 
 
-let pausedMonitorUpdates = false
-function pauseMonitorUpdates() {
-  if (pausedMonitorUpdates) clearTimeout(pausedMonitorUpdates);
-  pausedMonitorUpdates = setTimeout(() => pausedMonitorUpdates = false, settings.updateInterval * 2)
-}
 
 
 
@@ -1849,31 +1877,28 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
 
 
 
-// ignoreBrightnessEvent (suppress Windows brightness events during our own WMI
-// writes) lives in the "monitors" slice as a reassigned value. Its companion
-// timeout handle below stays a local — it's a setTimeout handle, not state.
+// ignoreBrightnessEvent flag lives in the "monitors" slice; BrightnessController
+// manages it for WMI type monitors. Initialise here so readers see a defined value.
 store.update("monitors", { ignoreBrightnessEvent: false })
-let ignoreBrightnessEventTimeout = false
-function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness", clearTransition = true, source = '') {
-  if(store.get("idle").isWindowsUserIdle) return false; // Skip if displays are off
+
+function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness", _clearTransition = true, source = '') {
+  if (store.get("idle").isWindowsUserIdle) return false
   try {
     let level = newLevel
     let vcp = "brightness"
-    switch(vcpValue) {
+    switch (vcpValue) {
       case "brightness": vcp = "brightness"; break;
-      case "sdr": vcp = "sdr"; break;
-      default: vcp = `0x${parseInt(vcpValue).toString(16)}`;
+      case "sdr":        vcp = "sdr";        break;
+      default:           vcp = `0x${parseInt(vcpValue).toString(16)}`;
     }
 
     let monitor = false
     if (typeof index == "string" && index * 1 != index) {
-      monitor = Object.values(monitors).find((display) => {
-        return display?.id?.indexOf(index) === 0
-      })
+      monitor = Object.values(monitors).find((display) => display?.id?.indexOf(index) === 0)
     } else {
       if (index >= Object.keys(monitors).length) {
         logger.debug("updateBrightness: Invalid monitor")
-        return false;
+        return false
       }
       monitor = monitors[index]
     }
@@ -1883,22 +1908,26 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
       return false
     }
 
-    if (settings.hideDisplays?.[monitor.key] === true) {
-      return false
-    }
-    
+    if (settings.hideDisplays?.[monitor.key] === true) return false
 
-    if(vcp == "brightness" && monitor.hdr === "active" && settings.sdrAsMainSliderDisplays?.[monitor.key]) {
-      vcp = "sdr"
-      useCap = false
+    // -----------------------------------------------------------------------
+    // Canonical brightness path — delegate to BrightnessController.
+    // Non-brightness VCP codes (contrast, sharpness, etc.) and raw SDR calls
+    // bypass the controller and dispatch directly below.
+    // -----------------------------------------------------------------------
+    if (vcp === "brightness") {
+      // User-initiated sources clear dim offsets ('manual'); hardware/schedule sources do not.
+      const USER_INITIATED = new Set(['user-panel', 'cli', 'api', 'hotkey', 'tray-scroll', 'profile', 'known-displays', ''])
+      const controllerSource = USER_INITIATED.has(source) ? 'manual' : source
+      brightnessController.setCanonical(monitor.id, { brightness: newLevel }, controllerSource)
+      return monitor.id
     }
 
-    if (clearTransition && currentTransition) {
-      clearInterval(currentTransition)
-      currentTransition = null
-    }
+    // -----------------------------------------------------------------------
+    // Non-canonical paths (explicit SDR and other VCP codes)
+    // -----------------------------------------------------------------------
 
-    if(shouldSkipDisplay(monitor)) {
+    if (shouldSkipDisplay(monitor)) {
       logger.debug(`\x1b[31mSkipping monitor ${logger.shortId(monitor.id)} due to rules list\x1b[0m`)
       return false
     }
@@ -1906,98 +1935,26 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
     const normalized = Utils.normalizeBrightness(level, false, (useCap ? monitor.min : 0), (useCap ? monitor.max : 100), (useCap ? monitor.calibration : []))
 
     if (vcp === "sdr") {
-      monitorsThread.send({
-        type: "sdr",
-        brightness: level,
-        id: monitor.id
-      })
+      monitorsThread.send({ type: "sdr", brightness: level, id: monitor.id })
       monitor.sdrLevel = level
-      if(settings.sdrAsMainSliderDisplays?.[monitor.key]) {
+      if (settings.sdrAsMainSliderDisplays?.[monitor.key]) {
         monitor.brightness = level
         monitor.brightnessRaw = normalized
       }
     } else if (monitor.type == "ddcci") {
-      if (vcp === "brightness") {
-        monitor.brightness = level
-        monitor.brightnessRaw = normalized
-        monitorsThread.send({
-          type: "brightness",
-          brightness: normalized * ((monitor.brightnessMax || 100) / 100),
-          id: monitor.id
-        })
-        logger.debug(`[brightness] set [${logger.shortId(monitor.id)}]${source ? ` [${source}]` : ''} ${level}%`)
-
-        // Replace DDC/CI brightness with SDR
-        if(settings.sdrAsMainSliderDisplays?.[monitor.key] && monitor.hdr === "active") {
-          monitor.brightness = monitor.sdrLevel
-        }
-
-        // Apply linked DDC/CI features
+      // Explicit VCP code (contrast, sharpness, linked feature, etc.)
+      const vcpString = Utils.vcpStr(vcp)
+      try {
         const featuresSettings = settings.monitorFeaturesSettings?.[monitor.hwid[1]]
-        if(featuresSettings) {
-          // For each feature, check for linked value
-          for(const vcp in monitor.features) {
-            if(featuresSettings[vcp]?.linked && settings.monitorFeatures?.[monitor.hwid[1]]?.[vcp]) {
-
-              const maxBrightness = (featuresSettings[vcp].maxVisual ?? 100)
-              let processedLevel = newLevel
-              if(processedLevel > maxBrightness) {
-                processedLevel = maxBrightness
-              }
-
-              const capped = parseInt(Utils.normalizeBrightness(processedLevel, true, 0, maxBrightness))
-              updateBrightnessThrottle(index, capped, useCap, false, vcp, clearTransition, source)
-            }
-          }
+        if (featuresSettings?.[vcp] && featuresSettings[vcp].min >= 0 && featuresSettings[vcp].max <= 100) {
+          level = Utils.normalizeBrightness(level, false, featuresSettings[vcp].min, featuresSettings[vcp].max)
         }
-      } else {
-        const vcpString = Utils.vcpStr(vcp)
-        try {
-          
-          // Normalize VCP value, if applicable
-          const featuresSettings = settings.monitorFeaturesSettings?.[monitor.hwid[1]]
-          if(featuresSettings?.[vcp] && featuresSettings[vcp].min >= 0 && featuresSettings[vcp].max <= 100) {
-            level = Utils.normalizeBrightness(level, false, featuresSettings[vcp].min, featuresSettings[vcp].max)
-          }
-          
-          if(monitor.features?.[vcpString]) {
-            monitor.features[vcpString][0] = parseInt(level)
-          }
-          
-          
-          monitorsThread.send({
-            type: "vcp",
-            monitor: monitor.hwid.join("#"),
-            code: parseInt(vcp),
-            value: parseInt(level)
-          })
-          logger.debug(`[vcp] set ${vcpString} [${logger.shortId(monitor.id)}]${source ? ` [${source}]` : ''}`, monitor.features?.[vcpString])
-          
-        } catch(e) {
-          logger.debug(`Couldn't set VCP code ${vcpString} for monitor ${logger.shortId(monitor.id)}`, e)
-        }
+        if (monitor.features?.[vcpString]) monitor.features[vcpString][0] = parseInt(level)
+        monitorsThread.send({ type: "vcp", monitor: monitor.hwid.join("#"), code: parseInt(vcp), value: parseInt(level) })
+        logger.debug(`[vcp] set ${vcpString} [${logger.shortId(monitor.id)}]${source ? ` [${source}]` : ''}`, monitor.features?.[vcpString])
+      } catch (e) {
+        logger.debug(`Couldn't set VCP code ${vcpString} for monitor ${logger.shortId(monitor.id)}`, e)
       }
-    } else if (monitor.type === "studio-display") {
-      monitor.brightness = level
-      monitor.brightnessRaw = normalized
-      monitorsThread.send({
-        type: "brightness",
-        brightness: normalized * ((monitor.brightnessMax || 100) / 100),
-        id: monitor.id
-      })
-    } else if (monitor.type == "wmi") {
-      store.update("monitors", { ignoreBrightnessEvent: true }) // Don't listen for Windows brightness events
-      monitor.brightness = level
-      monitor.brightnessRaw = normalized
-      monitorsThread.send({
-        type: "brightness",
-        brightness: normalized
-      })
-      if(ignoreBrightnessEventTimeout) clearTimeout(ignoreBrightnessEventTimeout);
-      ignoreBrightnessEventTimeout = setTimeout(() => {
-        store.update("monitors", { ignoreBrightnessEvent: false })
-        ignoreBrightnessEventTimeout = false
-      }, 500)
     }
 
     setTrayStatus()
@@ -2051,122 +2008,62 @@ function updateAllBrightness(brightness, mode = "offset", source = '') {
 }
 
 
-let currentTransition = null
-function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}, onlyMonitorIds = null) {
-  if (currentTransition !== null) clearInterval(currentTransition);
-
-  // Slow down transition
-  let transitionIntervalMult = 1
+// Animated schedule transition — delegates to the controller's animation engine.
+// stepSpeed controls pace (steps per tick); adjustmentTimeSpeed preset applies
+// interval/step multipliers identical to the old setInterval approach.
+function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}) {
+  let intervalMult = 1, stepMult = 1
   switch (settings.adjustmentTimeSpeed) {
-    case "slow": transitionIntervalMult = 4; break;
-    case "slowest": transitionIntervalMult = 10; break;
-    default: transitionIntervalMult = 1; break;
+    case 'slow':    intervalMult = 4;  break
+    case 'slowest': intervalMult = 10; break
   }
-
-  // Speed up transition
-  let stepSpeedMult = 1
   switch (settings.adjustmentTimeSpeed) {
-    case "faster": stepSpeedMult = 3; break;
-    case "fastest": stepSpeedMult = 6; break;
-    default: stepSpeedMult = 1; break;
+    case 'faster':  stepMult = 3; break
+    case 'fastest': stepMult = 6; break
   }
+  const step = stepSpeed * stepMult
+  const baseIntervalMs = (settings.updateInterval || 50) * intervalMult
+  const usePerMonitor = settings.adjustmentTimeIndividualDisplays
 
-  const step = (stepSpeed * stepSpeedMult)
-  const usePerMonitorTargets = settings.adjustmentTimeIndividualDisplays || onlyMonitorIds
-  const targetMonitorCount = onlyMonitorIds
-    ? onlyMonitorIds.length
-    : Object.keys(monitors).length
-
-  currentTransition = setInterval(() => {
-    if (store.get("power").recentlyWokeUp || store.get("idle").isWindowsUserIdle) {
-      clearInterval(currentTransition);
-      currentTransition = null;
-      return;
-    }
-
-    let numDone = 0
-    for (let key in monitors) {
-      const monitor = monitors[key]
-      if (onlyMonitorIds && !onlyMonitorIds.includes(monitor.id)) continue
-      // Monitor Focus owns the brightness of inactive-dimmed displays via its own
-      // ramp. Stepping them here too makes both intervals write opposite targets
-      // every tick — the up/down flicker. Count as done and leave it to focus.
-      if (monitor.inactiveDimmed) { numDone++; continue }
-
-      const normalized = usePerMonitorTargets
-        ? (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
-        : level
-
-      if (monitor.brightness < normalized + step + 1 && monitor.brightness > normalized - step - 1) {
-        updateBrightness(monitor.id, normalized, undefined, undefined, false)
-        numDone++
-      } else {
-        updateBrightness(monitor.id, monitor.brightness < normalized ? monitor.brightness + step : monitor.brightness - step, undefined, undefined, false)
-      }
-    }
-    touchMonitors()
-
-    if (numDone === targetMonitorCount) {
-      clearInterval(currentTransition);
-      currentTransition = null
-      // Apply software dim and display color once transition reaches the target
-      for (let k in monitors) {
-        if (onlyMonitorIds && !onlyMonitorIds.includes(monitors[k].id)) continue
-        let dimLevel = softwareDimLevel
-        if (usePerMonitorTargets) {
-          dimLevel = (eventMonitorsSoftwareDim[monitors[k].id] >= 0 ? eventMonitorsSoftwareDim[monitors[k].id] : softwareDimLevel)
-        }
-        updateSoftwareDim(monitors[k].id, dimLevel)
-        let kelvin = warmthKelvin
-        if (settings.adjustmentTimeIndividualDisplays && eventMonitorsKelvin[monitors[k].id] != null) {
-          kelvin = eventMonitorsKelvin[monitors[k].id]
-        }
-        let highlight = highlightWeight
-        if (settings.adjustmentTimeIndividualDisplays && eventMonitorsHighlightWeight[monitors[k].id] != null) {
-          highlight = eventMonitorsHighlightWeight[monitors[k].id]
-        }
-        const colorUpdates = {}
-        if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
-        if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
-        if (Object.keys(colorUpdates).length) updateDisplayColor(monitors[k].id, colorUpdates, 'transition-end')
-      }
-    }
-  }, settings.updateInterval * transitionIntervalMult)
-}
-
-function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}, onlyMonitorIds = null) {
-  for (let key in monitors) {
+  for (const key in monitors) {
     const monitor = monitors[key]
-    if (onlyMonitorIds && !onlyMonitorIds.includes(monitor.id)) continue
-    // Skip inactive-dimmed monitors — Monitor Focus owns their brightness/dim.
-    // restoreMonitorFocusBrightness reads scheduledBrightness, so a schedule change
-    // while dimmed still lands correctly on cursor return.
-    if (monitor.inactiveDimmed) continue
-    let normalized = level
-    let dimLevel = softwareDimLevel
+    const targetBrightness = usePerMonitor && eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level
+    const targetDim = usePerMonitor && eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel
+    const range = Math.abs(targetBrightness - brightnessController.getCanonical(monitor.id).brightness)
+    const durationMs = step > 0 ? (range / step) * baseIntervalMs : 0
+
+    brightnessController.animateTo(monitor.id, 'canonical.brightness', targetBrightness, durationMs)
+    brightnessController.animateTo(monitor.id, 'canonical.softwareDim', targetDim, durationMs)
+
     let kelvin = warmthKelvin
     let highlight = highlightWeight
-    if (settings.adjustmentTimeIndividualDisplays || onlyMonitorIds) {
-      normalized = (eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level)
-      dimLevel = (eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel)
+    if (usePerMonitor && eventMonitorsKelvin[monitor.id] != null) kelvin = eventMonitorsKelvin[monitor.id]
+    if (usePerMonitor && eventMonitorsHighlightWeight[monitor.id] != null) highlight = eventMonitorsHighlightWeight[monitor.id]
+    const colorUpdates = {}
+    if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
+    if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
+    if (Object.keys(colorUpdates).length) updateDisplayColor(monitor.id, colorUpdates, 'schedule-animate')
+  }
+}
+
+// Instant schedule apply — sets canonical synchronously via the controller.
+function transitionlessBrightness(level, eventMonitors = {}, softwareDimLevel = 0, eventMonitorsSoftwareDim = {}, warmthKelvin = 6500, eventMonitorsKelvin = {}, highlightWeight = 0, eventMonitorsHighlightWeight = {}) {
+  const usePerMonitor = settings.adjustmentTimeIndividualDisplays
+  for (let key in monitors) {
+    const monitor = monitors[key]
+    const targetBrightness = usePerMonitor && eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level
+    const targetDim = usePerMonitor && eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel
+    let kelvin = warmthKelvin
+    let highlight = highlightWeight
+    if (usePerMonitor) {
+      if (eventMonitorsKelvin[monitor.id] != null) kelvin = eventMonitorsKelvin[monitor.id]
+      if (eventMonitorsHighlightWeight[monitor.id] != null) highlight = eventMonitorsHighlightWeight[monitor.id]
     }
-    if (settings.adjustmentTimeIndividualDisplays) {
-      if (eventMonitorsKelvin[monitor.id] != null) {
-        kelvin = eventMonitorsKelvin[monitor.id]
-      }
-      if (eventMonitorsHighlightWeight[monitor.id] != null) {
-        highlight = eventMonitorsHighlightWeight[monitor.id]
-      }
-    }
-    // When updating only a subset of monitors (onlyMonitorIds is set), don't clear
-    // currentTransition — an inactive-dim animation may be running on other monitors.
-    updateBrightness(monitor.id, normalized, undefined, undefined, !onlyMonitorIds)
-    updateSoftwareDim(monitor.id, dimLevel)
+    brightnessController.setCanonical(monitor.id, { brightness: targetBrightness, softwareDim: targetDim }, 'schedule')
     const colorUpdates = {}
     if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
     if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
     if (Object.keys(colorUpdates).length) updateDisplayColor(monitor.id, colorUpdates, 'transitionless')
-    touchMonitors()
   }
 }
 
@@ -2268,6 +2165,41 @@ ipcMain.on('update-brightness', function (event, data) {
   }
 })
 
+// Unified settings handler — new renderer target (see docs/adr/0002 IPC consolidation).
+// Brightness and softwareDim route through BrightnessController for canonical tracking.
+// Warmth/highlight still delegate to their own subsystems (manual-active flag logic).
+ipcMain.on('update-settings', (_event, { monitorId, brightness, softwareDim, warmth, highlightCompression }) => {
+  setRecentlyInteracted(true)
+  const partial = {}
+  if (brightness !== undefined)   partial.brightness = brightness
+  if (softwareDim !== undefined)  partial.softwareDim = softwareDim
+  if (Object.keys(partial).length) brightnessController.setCanonical(monitorId, partial, 'manual')
+  if (warmth !== undefined)             updateWarmth(monitorId, warmth)
+  if (highlightCompression !== undefined) updateHighlightCompression(monitorId, highlightCompression)
+  monitorFocus.notifyInteraction(monitorId, 'user-panel')
+  if (hotkeyOverlayTimeout) hotkeyOverlayStart()
+})
+
+// Linked-levels variant: atomic group update — one monitors-updated push covers
+// all monitors so the renderer never sees a partial state mid-drag.
+ipcMain.on('update-settings-group', (_event, { monitorIds, brightness, softwareDim, warmth, highlightCompression }) => {
+  setRecentlyInteracted(true)
+  const partial = {}
+  if (brightness !== undefined)  partial.brightness = brightness
+  if (softwareDim !== undefined) partial.softwareDim = softwareDim
+  if (Object.keys(partial).length) brightnessController.setCanonicalGroup(monitorIds, partial, 'manual')
+  if (warmth !== undefined || highlightCompression !== undefined) {
+    for (const monitorId of monitorIds) {
+      if (warmth !== undefined)             updateWarmth(monitorId, warmth)
+      if (highlightCompression !== undefined) updateHighlightCompression(monitorId, highlightCompression)
+      monitorFocus.notifyInteraction(monitorId, 'user-panel')
+    }
+  } else {
+    for (const monitorId of monitorIds) monitorFocus.notifyInteraction(monitorId, 'user-panel')
+  }
+  if (hotkeyOverlayTimeout) hotkeyOverlayStart()
+})
+
 ipcMain.on('update-software-dim', (event, { monitorId, level }) => {
   updateSoftwareDim(monitorId, level)
 })
@@ -2333,8 +2265,6 @@ ipcMain.on('get-refreshing', () => {
 ipcMain.on('open-settings', createSettings)
 
 ipcMain.on('log', (e, msg) => logger.fromRemote('UI', msg))
-
-ipcMain.on('pause-updates', pauseMonitorUpdates)
 
 ipcMain.on('open-url', (event, url) => {
   if (url === "ms-store") {
@@ -2602,17 +2532,19 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
     } else if(setting.name === "GUID_STANDBY_TIMEOUT") {
       // "Make my device sleep after"
     } else if(setting.name === "GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS") {
-      // Internal display brightness change
+      // Internal display brightness change from OSD buttons or ambient sensor.
+      // Route through BrightnessController as a canonical write so it becomes
+      // the new source of truth (same as a manual slider move). The controller
+      // manages the ignoreBrightnessEvent flag for its own WMI writes, so no
+      // suppression timer is needed here.
       if(!settings.useGuidBrightnessEvent) return false;
       if(!store.get("monitors").ignoreBrightnessEvent) {
         for(const hwid2 in monitors) {
           const monitor = monitors[hwid2]
           if(monitor.type === "wmi") {
             const normalized = Utils.normalizeBrightness(setting.data, true, monitor.min, monitor.max, monitor.calibration)
-            monitor.brightness = normalized
-            monitor.brightnessRaw = setting.data
+            brightnessController.setCanonical(monitor.id, { brightness: normalized }, 'wmi')
           }
-          touchMonitors()
         }
       }
     }
@@ -4109,27 +4041,22 @@ function idleCheckShort() {
       try {
         const idleBrightness = settings.detectIdleBrightness ?? 0
         const idleSoftwareDim = settings.detectIdleSoftwareDim ?? 0
-        const transitionMonitors = {}
+        const idleStepSpeed = settings.idleTransitionSpeed || 0
+        const idleIntervalMs = settings.updateInterval || 50
         Object.values(monitors)?.forEach((monitor) => {
-          if(!shouldSkipDisplay(monitor, true)) {
-            monitor.preDimBrightness = (settings.monitorFocusEnabled && monitorFocus?.isDimmed(monitor.id))
-              ? (monitorFocus.getPreDimBrightness(monitor.id) ?? monitor.brightness)
-              : monitor.brightness
-            if(settings.idleTransitionSpeed) {
-              transitionMonitors[monitor.id] = idleBrightness
+          if (!shouldSkipDisplay(monitor, true)) {
+            const canonicalBrightness = brightnessController.getCanonical(monitor.id).brightness
+            const idleOffset = Math.max(0, canonicalBrightness - idleBrightness)
+            if (idleStepSpeed > 0 && idleOffset > 0) {
+              brightnessController.animateTo(monitor.id, 'idleOffset', idleOffset, (idleOffset / idleStepSpeed) * idleIntervalMs)
             } else {
-              updateBrightness(monitor.id, idleBrightness, true, "brightness", undefined, 'idle')
+              brightnessController.setDimOffset(monitor.id, 'idle', idleOffset)
             }
           }
         })
-        if(Object.keys(transitionMonitors).length) {
-          transitionBrightness(idleBrightness, transitionMonitors, settings.idleTransitionSpeed)
-        }
         if (idleSoftwareDim > 0) {
           Object.values(monitors).forEach((monitor) => {
-            if (!shouldSkipDisplay(monitor, true)) {
-              updateSoftwareDim(monitor.id, idleSoftwareDim)
-            }
+            if (!shouldSkipDisplay(monitor, true)) updateSoftwareDim(monitor.id, idleSoftwareDim)
           })
         }
       } catch (e) {
@@ -4144,10 +4071,10 @@ function idleCheckShort() {
       clearInterval(notIdleMonitor)
       notIdleMonitor = false
 
-      // Clear idle software dim and ghost markers. Skip monitors still inactive-dimmed
-      // by monitorFocus — their dim state will be preserved by clearDimmedStateAfterIdle.
+      // Clear idle dim offset and software dim. Skip software dim clear for
+      // inactive-dimmed monitors — clearDimmedStateAfterIdle handles those.
       Object.values(monitors).forEach((monitor) => {
-        delete monitor.preDimBrightness
+        brightnessController.clearDimOffset(monitor.id, 'idle')
         if (settings.detectIdleSoftwareDim > 0 && !(settings.monitorFocusEnabled && monitorFocus?.isDimmed(monitor.id))) {
           updateSoftwareDim(monitor.id, 0)
         }
@@ -4212,14 +4139,6 @@ function idleCheckShort() {
 
 // Priority brightness system:
 // Windows asleep > Idle dim > Inactive monitor dim > Schedule > Manual
-// scheduledBrightness tracks what the schedule intends for each monitor,
-// including monitors that are currently inactive-dimmed, so restoration
-// always reflects the current schedule rather than a stale saved value.
-// schedule slice. scheduledBrightness is an entity value (see state/store.js):
-// a live, mutate-in-place map. lastTimeEvent (seeded further below) is a
-// reactive value read/written through `update`.
-store.update("schedule", { scheduledBrightness: {} })
-const scheduledBrightness = store.ref("schedule", "scheduledBrightness") // { [monitorId]: { brightness, softwareDim } }
 
 const monitorFocus = createMonitorFocusController({
   store,
@@ -4227,7 +4146,7 @@ const monitorFocus = createMonitorFocusController({
   monitors,
   tempSettings,
   softwareDimLevels,
-  scheduledBrightness,
+  brightnessController,
   screen,
   logger,
   updateBrightness,
@@ -4296,35 +4215,13 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           const eventMonitorsHighlightWeight = foundEvent.monitorsHighlightWeight ?? {}
           const eventMonitors = foundEvent.monitors ?? {}
 
-          // Track schedule's intended brightness for every monitor, including inactive-dimmed ones,
-          // so restoring an inactive-dimmed monitor always lands on the current schedule value.
-          for (const monitor of Object.values(monitors)) {
-            const brightness = (settings.adjustmentTimeIndividualDisplays && eventMonitors[monitor.id] >= 0)
-              ? eventMonitors[monitor.id]
-              : (foundEvent.brightness ?? 50)
-            const softwareDim = (settings.adjustmentTimeIndividualDisplays && eventMonitorsSoftwareDim[monitor.id] >= 0)
-              ? eventMonitorsSoftwareDim[monitor.id]
-              : eventSoftwareDim
-            scheduledBrightness[monitor.id] = { brightness, softwareDim }
-            logger.debug(`[schedule] target ${logger.shortId(monitor.id)} → ${brightness - softwareDim}`)
-          }
-
-          // Skip monitors that are currently inactive-dimmed — they will pick up the new
-          // schedule value when the user moves their cursor back to them.
-          const onlyMonitorIds = monitorFocus.isAnyDimmed()
-            ? Object.values(monitors).map(m => m.id).filter(id => !monitorFocus.isDimmed(id))
-            : null
-          if (onlyMonitorIds) {
-            const skipped = Object.values(monitors).map(m => m.id).filter(id => monitorFocus.isDimmed(id))
-            logger.debug(`[schedule] focus-dimmed monitors present — applying to [${onlyMonitorIds.join(', ')}], skipping [${skipped.join(', ')}]`)
-          }
-
-          // When some monitors are being skipped (inactive-dimmed), always apply instantly
-          // to avoid clearing the dim animation that's running on currentTransition.
-          if (instant || settings.adjustmentTimeSpeed === "instant" || settings.adjustmentTimeSpeed === "linear" || onlyMonitorIds) {
-            transitionlessBrightness(foundEvent.brightness, eventMonitors, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight, onlyMonitorIds)
+          // Controller owns canonical — schedule writes directly to canonical for all
+          // monitors (including inactive-dimmed ones). The inactiveOffset keeps commanded
+          // brightness at the dim level; restore just calls clearDimOffset.
+          if (instant || settings.adjustmentTimeSpeed === "instant" || settings.adjustmentTimeSpeed === "linear") {
+            transitionlessBrightness(foundEvent.brightness, eventMonitors, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight)
           } else {
-            transitionBrightness(foundEvent.brightness, eventMonitors, 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight, onlyMonitorIds)
+            transitionBrightness(foundEvent.brightness, eventMonitors, 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight)
           }
         }
 

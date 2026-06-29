@@ -195,29 +195,27 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     const dimLevel = level < 0 ? Math.min(100, -level) : 0
 
     if (numMonitors && state.linkedLevelsActive) {
-      // Update all monitors (linked)
+      // Update all monitors atomically via group handler — one monitors-updated
+      // push so the renderer never sees partial state mid-drag.
       const newDim = {}
+      const monitorIds = []
       for (let key in monitors) {
-        monitors[key].brightness = hardwareLevel
+        monitors[key].brightness = hardwareLevel  // optimistic display only
         newDim[key] = dimLevel
-        window.updateSoftwareDim(monitors[key].id, dimLevel)
+        monitorIds.push(monitors[key].id)
       }
+      window.ipc.send('update-settings-group', { monitorIds, brightness: hardwareLevel, softwareDim: dimLevel })
       setSoftwareDim(newDim)
       setState(prev => ({ ...prev, monitors }))
-      setLevelsChanged(true)
-      if (state.updateInterval === 999) syncBrightness()
     } else if (numMonitors > 0) {
       // Update single monitor
       if (sliderMonitor) {
-        sliderMonitor.brightness = hardwareLevel
+        sliderMonitor.brightness = hardwareLevel  // optimistic display only
         setSoftwareDim(prev => ({ ...prev, [slider.props.hwid]: dimLevel }))
-        window.updateSoftwareDim(sliderMonitor.id, dimLevel)
+        window.ipc.send('update-settings', { monitorId: sliderMonitor.id, brightness: hardwareLevel, softwareDim: dimLevel })
       }
       setState(prev => ({ ...prev, monitors }))
-      setLevelsChanged(true)
-      if (state.updateInterval === 999) syncBrightness()
     }
-    window.pauseMonitorUpdates()
   }
 
   // Update monitor info
@@ -357,21 +355,12 @@ const BrightnessPanel = memo(function BrightnessPanel() {
 
 
 
-  // Send new brightness to monitors, if changed
+  // Brightness is now sent directly in handleChange via update-settings IPC.
+  // This stub clears the doBackgroundEvent flag so re-renders don't pile up.
   const syncBrightness = () => {
-    const monitors = state.monitors
-    if (init && levelsChanged && (window.showPanel || doBackgroundEvent) && numMonitors) {
+    if (init && (doBackgroundEvent || levelsChanged) && numMonitors) {
       setDoBackgroundEvent(false)
       setLevelsChanged(false)
-      try {
-        for (let idx in monitors) {
-          if (monitors[idx].type != "none" && monitors[idx].brightness != lastLevels[idx]) {
-            window.updateBrightness(monitors[idx].id, monitors[idx].brightness)
-          }
-        }
-      } catch (e) {
-        console.error("Could not update brightness")
-      }
     }
   }
 
@@ -509,7 +498,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                 <div className="linked-diverged">
                   {namedEntries.map(({ monitor: m, level: mLevel }) => (
                     <div className="monitor-sliders" key={m.key}>
-                      <Slider name={getMonitorName(m, state.names)} id={m.id} level={mLevel} min={softwareDimMin} max={100} num={m.num} monitortype={m.type} hwid={m.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={m.inactiveDimmed ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={m.preDimBrightness} />
+                      <Slider name={getMonitorName(m, state.names)} id={m.id} level={mLevel} min={softwareDimMin} max={100} num={m.num} monitortype={m.type} hwid={m.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={m.ghostMarkerSource === 'idle' ? "Overridden by idle dim" : m.ghostMarkerSource === 'inactive' ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={m.ghostMarkerActive ? m.canonicalBrightness : undefined} />
                     </div>
                   ))}
                 </div>
@@ -613,7 +602,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                 const monSoftwareDimMin = -(window.settings?.softwareDimMax ?? 100)
                 return (
                   <div className="monitor-sliders" key={monitor.key}>
-                    <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={monitor.inactiveDimmed ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={monitor.preDimBrightness} />
+                    <Slider name={getMonitorName(monitor, state.names)} id={monitor.id} level={monLevel} min={monSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} afterName={showPowerButton()} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={monitor.ghostMarkerSource === 'idle' ? "Overridden by idle dim" : monitor.ghostMarkerSource === 'inactive' ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={monitor.ghostMarkerActive ? monitor.canonicalBrightness : undefined} />
                     {renderKelvinSlider(monitor)}
                     {renderHighlightSlider(monitor)}
                   </div>
@@ -636,7 +625,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
                       return (
                         <div className="feature-row feature-brightness">
                           <div className="feature-icon"><span className="icon vfix">&#xE706;</span></div>
-                          <Slider id={monitor.id} level={extLevel} min={extSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={monitor.inactiveDimmed ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={monitor.preDimBrightness} />
+                          <Slider id={monitor.id} level={extLevel} min={extSoftwareDimMin} max={100} num={monitor.num} monitortype={monitor.type} hwid={monitor.key} key={monitor.key} onChange={handleChange} scrollAmount={window.settings?.scrollFlyoutAmount} disabled={scheduleLocked.brightness} lockedTitle={monitor.ghostMarkerSource === 'idle' ? "Overridden by idle dim" : monitor.ghostMarkerSource === 'inactive' ? "Overridden by inactive monitor dim" : scheduleLocked.brightness ? "Overridden by schedule" : undefined} ghostLevel={monitor.ghostMarkerActive ? monitor.canonicalBrightness : undefined} />
                         </div>
                       )
                     })()}

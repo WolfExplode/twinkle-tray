@@ -25,7 +25,6 @@ function createHotkeyController(deps) {
     minMax,
     touchMonitors,
     updateBrightnessThrottle,
-    pauseMonitorUpdates,
     writeSettings,
     sleepDisplays,
     setRecentlyInteracted,
@@ -128,10 +127,7 @@ function createHotkeyController(deps) {
                 const { monitor, value } = hotkeyMonitor
                 if (action.target === "brightness") {
                   const normalizedAdjust = minMax(value)
-                  monitors[monitor.key].brightness = normalizedAdjust
-                  touchMonitors();
-                  updateBrightnessThrottle(monitor.id, monitors[monitor.key].brightness, true, false)
-                  pauseMonitorUpdates() // Stop incoming updates for a moment to prevent judder
+                  updateBrightnessThrottle(monitor.id, normalizedAdjust, true, false, undefined, undefined, 'hotkey')
 
                   // Break linked levels
                   if (settings.hotkeysBreakLinkedLevels && settings.linkedLevelsActive) {

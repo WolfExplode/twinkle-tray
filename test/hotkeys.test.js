@@ -8,7 +8,6 @@ function makeController(overrides = {}) {
   const calls = {
     updateBrightnessThrottle: [],
     touchMonitors: 0,
-    pauseMonitorUpdates: 0,
     writeSettings: [],
     sleepDisplays: [],
     refreshMonitors: [],
@@ -33,7 +32,6 @@ function makeController(overrides = {}) {
     minMax: (v, min = 0, max = 100) => Math.max(min, Math.min(max, v)),
     touchMonitors: () => { calls.touchMonitors++ },
     updateBrightnessThrottle: (...a) => { calls.updateBrightnessThrottle.push(a) },
-    pauseMonitorUpdates: () => { calls.pauseMonitorUpdates++ },
     writeSettings: (...a) => { calls.writeSettings.push(a) },
     sleepDisplays: (...a) => { calls.sleepDisplays.push(a) },
     setRecentlyInteracted: () => {},
@@ -50,19 +48,17 @@ test('set brightness applies the clamped value and shows the overlay', async () 
     id: 'h1',
     actions: [{ type: 'set', target: 'brightness', value: '40', allMonitors: true, monitors: {} }]
   })
-  assert.strictEqual(monitors.m0.brightness, 40)
-  assert.deepStrictEqual(calls.updateBrightnessThrottle[0], ['MON_0', 40, true, false])
-  assert.strictEqual(calls.pauseMonitorUpdates, 1)
+  assert.deepStrictEqual(calls.updateBrightnessThrottle[0], ['MON_0', 40, true, false, undefined, undefined, 'hotkey'])
   assert.strictEqual(calls.hotkeyOverlayStart, 1)
 })
 
 test('set brightness clamps out-of-range values', async () => {
-  const { controller, monitors } = makeController()
+  const { controller, calls } = makeController()
   await controller.doHotkey({
     id: 'h1',
     actions: [{ type: 'set', target: 'brightness', value: '250', allMonitors: true, monitors: {} }]
   })
-  assert.strictEqual(monitors.m0.brightness, 100)
+  assert.deepStrictEqual(calls.updateBrightnessThrottle[0], ['MON_0', 100, true, false, undefined, undefined, 'hotkey'])
 })
 
 test('set contrast writes the VCP code, not brightness', async () => {
@@ -81,7 +77,7 @@ test('offset brightness reads current monitor value, no VCP read', async () => {
     actions: [{ type: 'offset', target: 'brightness', value: '10', allMonitors: true, monitors: {} }]
   })
   // 50 (current) + 10 = 60
-  assert.deepStrictEqual(calls.updateBrightnessThrottle[0], ['MON_0', 60, true, false])
+  assert.deepStrictEqual(calls.updateBrightnessThrottle[0], ['MON_0', 60, true, false, undefined, undefined, 'hotkey'])
   assert.strictEqual(calls.getVCP.length, 0, 'brightness offset must not read a VCP code')
 })
 
@@ -152,7 +148,7 @@ test('applyHotkeys registers each accelerator, skipping entries without one', ()
     monitors: {}, settings, store: { get: () => ({}) }, logger: { debug() {} },
     globalShortcut: { unregisterAll() {}, register: (acc) => { registered.push(acc); return true } },
     getLastRefreshMonitors: () => Date.now(), refreshMonitors: async () => {}, getVCP: async () => 0,
-    minMax: v => v, touchMonitors() {}, updateBrightnessThrottle() {}, pauseMonitorUpdates() {},
+    minMax: v => v, touchMonitors() {}, updateBrightnessThrottle() {},
     writeSettings() {}, sleepDisplays() {}, setRecentlyInteracted() {}, hotkeyOverlayStart() {}, sendToAllWindows() {}
   })
   ctrl.applyHotkeys()

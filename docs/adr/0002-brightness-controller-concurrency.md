@@ -25,6 +25,7 @@ Introduce a `BrightnessController` module that is the sole writer of canonical b
 ## Consequences
 
 - All existing call sites that write `monitor.brightness` directly must be routed through `BrightnessController`.
+- Linked monitors are updated via `setCanonicalGroup(monitorIds[], settings, source)` — atomic, one `monitors-updated` push, no partial state visible to the renderer between monitors.
 - The transition loop (`currentTransition`) and focus controller (`monitorFocusTransitions`) must call `BrightnessController.setDimOffset()` / `clearDimOffset()` rather than calling `updateBrightness()` directly.
 - `clearDimOffset(monitorId, type)` is public — the idle system calls it when idle ends, the focus controller calls it when a monitor regains focus. `setCanonical` with source `'manual'` also calls it internally as a side effect, enforcing "manual always resets overlays" in one place.
 - The depth-1 DDC queue eliminates the "slider jumps back" bug caused by stale commands landing after newer ones.

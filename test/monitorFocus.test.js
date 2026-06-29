@@ -8,7 +8,6 @@ const {
   computeTimeoutMs,
   shouldDimMonitor,
   computeTransitionStep,
-  getRestoreTarget
 } = require('../src/monitorFocus')
 
 // Helpers: Electron-style display (flat bounds) and tray monitor (nested position).
@@ -108,26 +107,3 @@ test('computeTransitionStep clamps progress to 0..1', () => {
   assert.strictEqual(computeTransitionStep({ ...args, progress: 5 }).brightness, 90)
 })
 
-test('getRestoreTarget prefers the active schedule value', () => {
-  assert.deepStrictEqual(getRestoreTarget({
-    scheduleActive: true,
-    scheduledBrightness: { brightness: 70, softwareDim: 15 },
-    preDimBrightness: 40
-  }), { brightness: 70, softwareDim: 15 })
-})
-
-test('getRestoreTarget falls back to pre-dim brightness when schedule inactive', () => {
-  assert.deepStrictEqual(getRestoreTarget({
-    scheduleActive: false,
-    scheduledBrightness: { brightness: 70, softwareDim: 15 },
-    preDimBrightness: 40
-  }), { brightness: 40, softwareDim: 0 })
-})
-
-test('getRestoreTarget falls back when schedule active but no scheduled value', () => {
-  assert.deepStrictEqual(getRestoreTarget({
-    scheduleActive: true,
-    scheduledBrightness: undefined,
-    preDimBrightness: 55
-  }), { brightness: 55, softwareDim: 0 })
-})

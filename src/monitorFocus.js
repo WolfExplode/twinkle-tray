@@ -75,17 +75,6 @@ function computeTransitionStep({ startBrightness, targetBrightness, startSoftwar
   }
 }
 
-// Where to restore a monitor when the cursor returns. Prefer the schedule's
-// current intended value (so we land correctly even if the schedule changed
-// while the monitor was dimmed); otherwise fall back to the pre-dim brightness.
-function getRestoreTarget({ scheduleActive, scheduledBrightness, preDimBrightness }) {
-  const useSchedule = scheduleActive && scheduledBrightness
-  return {
-    brightness: useSchedule ? scheduledBrightness.brightness : preDimBrightness,
-    softwareDim: useSchedule ? scheduledBrightness.softwareDim : 0
-  }
-}
-
 module.exports = {
   buildMonitorMap,
   findDisplayAtPoint,
@@ -93,5 +82,4 @@ module.exports = {
   computeTimeoutMs,
   shouldDimMonitor,
   computeTransitionStep,
-  getRestoreTarget
 }
