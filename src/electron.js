@@ -1035,22 +1035,27 @@ function getKnownDisplays(useCurrentMonitors) {
 
   // Merge with existing displays
   if (useCurrentMonitors) {
-    known = Object.assign(known, JSON.parse(JSON.stringify(monitors)))
+    const snapshot = JSON.parse(JSON.stringify(monitors))
+    for (const key in snapshot) {
+      const m = snapshot[key]
+      if (m.canonicalBrightness !== undefined) m.brightness = m.canonicalBrightness
+    }
+    known = Object.assign(known, snapshot)
   }
 
   return known
 }
 
 // Look up all known displays and re-apply last brightness
-function setKnownBrightness(useCurrentMonitors = false, useTransition = false, transitionSpeed = 1) {
+function setKnownBrightness(useCurrentMonitors = false, useTransition = false, transitionSpeed = 1, source = 'known-displays') {
 
   logger.debug(`\x1b[36mSetting brightness for known displays\x1b[0m`, useCurrentMonitors, useTransition, transitionSpeed)
 
   const known = getKnownDisplays(useCurrentMonitors)
-  applyProfile(known, useTransition, transitionSpeed)
+  applyProfile(known, useTransition, transitionSpeed, false, source)
 }
 
-function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, skipBadDisplays = false) {
+function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, skipBadDisplays = false, source = 'known-displays') {
 
   applyOrder(profile)
   applyRemaps(profile)
@@ -1083,7 +1088,7 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
             monitor.brightness = monitor.sdrLevel
           }
           logger.debug(`[applyProfile] ${logger.shortId(monitor.id)} → ${monitor.brightness - (monitor.softwareDim || 0)}`)
-          updateBrightness(monitor.id, monitor.brightness, undefined, undefined, undefined, 'known-displays')
+          updateBrightness(monitor.id, monitor.brightness, undefined, undefined, undefined, source)
         } else {
           logger.debug(`[applyProfile] ${logger.shortId(monitor.id)} skipped — type=${monitor.type} brightnessType=${monitor.brightnessType}`)
         }
@@ -3251,10 +3256,12 @@ function getDebugTrayMenuItems() {
 }
 
 function getTemperatureMenuItem() {
+  const scheduleOwned = settings.adjustmentTimesActive && settings.adjustmentTimeTemperatureEnabled
   return {
-    label: T.t("PANEL_LABEL_COLOR_TEMPERATURE"),
+    label: T.t("PANEL_LABEL_COLOR_TEMPERATURE") + (scheduleOwned ? ` (${T.t("PANEL_BUTTON_TIME_ADJUSTMENTS")})` : ""),
     type: 'checkbox',
     checked: store.get("color").manualTemperatureActive,
+    enabled: !scheduleOwned,
     click: () => {
       toggleColorTemperature()
     }
@@ -3262,10 +3269,12 @@ function getTemperatureMenuItem() {
 }
 
 function getHighlightCompressionMenuItem() {
+  const scheduleOwned = settings.adjustmentTimesActive && settings.adjustmentTimeHighlightCompressionEnabled
   return {
-    label: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION"),
+    label: T.t("PANEL_LABEL_HIGHLIGHT_COMPRESSION") + (scheduleOwned ? ` (${T.t("PANEL_BUTTON_TIME_ADJUSTMENTS")})` : ""),
     type: 'checkbox',
     checked: store.get("color").manualHighlightActive,
+    enabled: !scheduleOwned,
     click: () => {
       toggleHighlightCompression()
     }
@@ -3295,7 +3304,7 @@ function setTrayStatus() {
   try {
     if (tray) {
       const kelvin = getCurrentKelvin()
-      const showKelvin = (store.get("color").manualTemperatureActive || settings.adjustmentTimeTemperatureEnabled) && kelvin < 6500
+      const showKelvin = (store.get("color").manualTemperatureActive || (settings.adjustmentTimesActive && settings.adjustmentTimeTemperatureEnabled)) && kelvin < 6500
       tray.setToolTip(Utils.buildTrayTooltip(monitors, { isDev, kelvin, showKelvin }))
     }
   } catch (e) {
@@ -4085,7 +4094,7 @@ function idleCheckShort() {
       if (settings.detectIdleTimeEnabled) {
         // Always restore when dimmed
         const block = blockBadDisplays("idle:restore")
-        setKnownBrightness(false)
+        setKnownBrightness(false, false, 1, 'idle-restore')
         block.release()
       } else {
         // Not dimmed, try checking ToD first. sKB as backup.
@@ -4105,7 +4114,7 @@ function idleCheckShort() {
         // Similar logic to above
         if (settings.detectIdleTimeEnabled) {
           // Always restore when dimmed, then check ToD
-          setKnownBrightness(false)
+          setKnownBrightness(false, false, 1, 'idle-restore')
           applyCurrentAdjustmentEvent(true, false)
         } else {
           // Not dimmed, try checking ToD first. sKB as backup.

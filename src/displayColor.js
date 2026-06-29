@@ -198,7 +198,7 @@ function createDisplayColor(deps) {
         applyManual(id, manualLevels[id] ?? effectiveLevels[id] ?? defaultValue)
       }
     } else {
-      const foundEvent = settings[scheduleKey] ? schedule.getCurrentAdjustmentEvent() : null
+      const foundEvent = (settings[scheduleKey] && settings.adjustmentTimesActive) ? schedule.getCurrentAdjustmentEvent() : null
       if (logger) logger.debug(`[color] toggleColorEffect(${type}) OFF: scheduleEnabled=${settings[scheduleKey]} foundEvent.${scheduledProp}=${foundEvent?.[scheduledProp] ?? 'none'} → fallback=${defaultValue}`)
       for (const key in monitors) {
         const monitor = monitors[key]
