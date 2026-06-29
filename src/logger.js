@@ -98,14 +98,23 @@ function write(level, args) {
   }
 }
 
+// \\?\DISPLAY#VTK2360#5&e968902&0&UID4357  →  VTK2360/4357
+function shortId(monitorId) {
+  if (!monitorId || typeof monitorId !== 'string') return String(monitorId)
+  const parts = monitorId.split('#')
+  if (parts.length < 3) return monitorId
+  const model = parts[1]
+  const uid = parts[2].match(/UID(\w+)/)
+  return uid ? `${model}/${uid[1]}` : model
+}
+
 const logger = {
   init,
+  shortId,
   debug: (...args) => write('debug', args),
   info: (...args) => write('info', args),
   warn: (...args) => write('warn', args),
   error: (...args) => write('error', args),
-  // Receive an already-formatted log forwarded from another process
-  // (renderer preload, forked child) and tag its source.
   fromRemote: (source, ...args) => write('info', [`[${source}]`, ...args])
 }
 

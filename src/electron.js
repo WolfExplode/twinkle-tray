@@ -357,7 +357,7 @@ function enableMouseEvents() {
           const amount = delta * settings.scrollShortcutAmount;
 
           setRecentlyInteracted(true)
-          updateAllBrightness(amount)
+          updateAllBrightness(amount, "offset", "tray-scroll")
 
           // If panel isn't open, use the overlay
           if (store.get("panel").panelState !== "visible") {
@@ -1072,7 +1072,7 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
       try {
         const monitor = profile[hwid]
         if(shouldSkipDisplay(monitor)) {
-          logger.debug(`[applyProfile] skipping ${monitor.id} (shouldSkipDisplay)`)
+          logger.debug(`[applyProfile] skipping ${logger.shortId(monitor.id)} (shouldSkipDisplay)`)
           continue;
         }
 
@@ -1082,10 +1082,10 @@ function applyProfile(profile = {}, useTransition = false, transitionSpeed = 1, 
           if(settings.sdrAsMainSliderDisplays?.[monitor.key] && monitor.hdr === "active") {
             monitor.brightness = monitor.sdrLevel
           }
-          logger.debug(`[applyProfile] ${monitor.id} → ${monitor.brightness - (monitor.softwareDim || 0)}`)
-          updateBrightness(monitor.id, monitor.brightness)
+          logger.debug(`[applyProfile] ${logger.shortId(monitor.id)} → ${monitor.brightness - (monitor.softwareDim || 0)}`)
+          updateBrightness(monitor.id, monitor.brightness, undefined, undefined, undefined, 'known-displays')
         } else {
-          logger.debug(`[applyProfile] ${monitor.id} skipped — type=${monitor.type} brightnessType=${monitor.brightnessType}`)
+          logger.debug(`[applyProfile] ${logger.shortId(monitor.id)} skipped — type=${monitor.type} brightnessType=${monitor.brightnessType}`)
         }
       } catch (e) { logger.debug("Couldn't set brightness for known display!") }
     }
@@ -1810,7 +1810,7 @@ function pauseMonitorUpdates() {
 let updateBrightnessTimeout = false
 let updateBrightnessQueue = []
 let lastBrightnessTimes = []
-function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, vcp = "brightness", clearTransition = true) {
+function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, vcp = "brightness", clearTransition = true, source = '') {
   let idx = updateBrightnessQueue.length
   const found = updateBrightnessQueue.findIndex(item => item.id === id)
   updateBrightnessQueue[(found > -1 ? found : idx)] = {
@@ -1818,12 +1818,13 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
     level,
     useCap,
     vcp,
-    clearTransition
+    clearTransition,
+    source
   }
   const now = Date.now()
   if (lastBrightnessTimes[id] === undefined || now >= lastBrightnessTimes[id] + settings.updateInterval) {
     lastBrightnessTimes[id] = now
-    updateBrightness(id, level, useCap, vcp, clearTransition)
+    updateBrightness(id, level, useCap, vcp, clearTransition, source)
     if (sendUpdate) touchMonitors();
     return true
   } else if (!updateBrightnessTimeout) {
@@ -1833,7 +1834,7 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
       for (let bUpdate of updateBrightnessQueueCopy) {
         if (bUpdate) {
           try {
-            updateBrightness(bUpdate.id, bUpdate.level, bUpdate.useCap, bUpdate.vcp, bUpdate.clearTransition)
+            updateBrightness(bUpdate.id, bUpdate.level, bUpdate.useCap, bUpdate.vcp, bUpdate.clearTransition, bUpdate.source)
           } catch (e) {
             logger.error(e)
           }
@@ -1853,7 +1854,7 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
 // timeout handle below stays a local — it's a setTimeout handle, not state.
 store.update("monitors", { ignoreBrightnessEvent: false })
 let ignoreBrightnessEventTimeout = false
-function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness", clearTransition = true) {
+function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness", clearTransition = true, source = '') {
   if(store.get("idle").isWindowsUserIdle) return false; // Skip if displays are off
   try {
     let level = newLevel
@@ -1898,7 +1899,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
     }
 
     if(shouldSkipDisplay(monitor)) {
-      logger.debug(`\x1b[31mSkipping monitor ${monitor.id} due to rules list\x1b[0m`)
+      logger.debug(`\x1b[31mSkipping monitor ${logger.shortId(monitor.id)} due to rules list\x1b[0m`)
       return false
     }
 
@@ -1924,6 +1925,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
           brightness: normalized * ((monitor.brightnessMax || 100) / 100),
           id: monitor.id
         })
+        logger.debug(`[brightness] set [${logger.shortId(monitor.id)}]${source ? ` [${source}]` : ''} ${level}%`)
 
         // Replace DDC/CI brightness with SDR
         if(settings.sdrAsMainSliderDisplays?.[monitor.key] && monitor.hdr === "active") {
@@ -1944,7 +1946,7 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
               }
 
               const capped = parseInt(Utils.normalizeBrightness(processedLevel, true, 0, maxBrightness))
-              updateBrightnessThrottle(index, capped, useCap, false, vcp, clearTransition)
+              updateBrightnessThrottle(index, capped, useCap, false, vcp, clearTransition, source)
             }
           }
         }
@@ -1969,10 +1971,10 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
             code: parseInt(vcp),
             value: parseInt(level)
           })
-          logger.debug(`[vcp] set ${vcpString} [${monitor.id}]`, monitor.features?.[vcpString])
+          logger.debug(`[vcp] set ${vcpString} [${logger.shortId(monitor.id)}]${source ? ` [${source}]` : ''}`, monitor.features?.[vcpString])
           
         } catch(e) {
-          logger.debug(`Couldn't set VCP code ${vcpString} for monitor ${monitor.id}`, e)
+          logger.debug(`Couldn't set VCP code ${vcpString} for monitor ${logger.shortId(monitor.id)}`, e)
         }
       }
     } else if (monitor.type === "studio-display") {
@@ -2007,7 +2009,8 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
 }
 
 
-function updateAllBrightness(brightness, mode = "offset") {
+function updateAllBrightness(brightness, mode = "offset", source = '') {
+  logger.debug(`[brightness] updateAllBrightness ${mode} ${brightness}${source ? ` [${source}]` : ''}`)
 
   let linkedLevelVal
 
@@ -2043,12 +2046,7 @@ function updateAllBrightness(brightness, mode = "offset") {
 
   // Send brightness updates
   for (let key in monitors) {
-    updateBrightnessThrottle(monitors[key].id, monitors[key].brightness, true, false)
-  }
-
-  // Manual write — reset inactive-dim state and timer for every monitor
-  for (let key in monitors) {
-    if (monitors[key].id) monitorFocus?.notifyInteraction(monitors[key].id)
+    updateBrightnessThrottle(monitors[key].id, monitors[key].brightness, true, false, undefined, undefined, source)
   }
 }
 
@@ -2261,8 +2259,8 @@ ipcMain.on('request-colors', () => {
 
 ipcMain.on('update-brightness', function (event, data) {
   setRecentlyInteracted(true)
-  const monitorId = updateBrightness(data.index, data.level)
-  if (monitorId) monitorFocus.notifyInteraction(monitorId)
+  const monitorId = updateBrightness(data.index, data.level, undefined, undefined, undefined, 'user-panel')
+  if (monitorId) monitorFocus.notifyInteraction(monitorId, 'user-panel')
 
   // If overlay is visible, keep it open
   if (hotkeyOverlayTimeout) {
@@ -2396,11 +2394,11 @@ ipcMain.on('sleep-displays', () => sleepDisplays(settings.sleepAction, 1000))
 ipcMain.on('sleep-display', (e, hwid) => turnOffDisplayDDC(hwid, true))
 ipcMain.on('set-vcp', (e, values) => {
   setRecentlyInteracted(true)
-  updateBrightnessThrottle(values.monitor, values.value, false, true, values.code)
+  updateBrightnessThrottle(values.monitor, values.value, false, true, values.code, undefined, 'user-vcp')
 })
 ipcMain.on('set-sdr-brightness', (e, values) => {
   setRecentlyInteracted(true)
-  updateBrightnessThrottle(values.monitor, values.value, false, true, "sdr")
+  updateBrightnessThrottle(values.monitor, values.value, false, true, "sdr", undefined, 'user-sdr')
 })
 
 ipcMain.on('get-window-history', () => sendToAllWindows('window-history', windowHistory))
@@ -2914,7 +2912,7 @@ function windowMatchesProfile(window) {
 function applyProfileBrightness(profile) {
   try {
     Object.values(monitors)?.forEach(monitor => {
-      updateBrightness(monitor.id, profile.monitors[monitor.id], true, "brightness")
+      updateBrightness(monitor.id, profile.monitors[monitor.id], true, "brightness", undefined, 'profile')
     })
     touchMonitors()
   } catch (e) {
@@ -4120,7 +4118,7 @@ function idleCheckShort() {
             if(settings.idleTransitionSpeed) {
               transitionMonitors[monitor.id] = idleBrightness
             } else {
-              updateBrightness(monitor.id, idleBrightness, true, "brightness")
+              updateBrightness(monitor.id, idleBrightness, true, "brightness", undefined, 'idle')
             }
           }
         })
@@ -4308,7 +4306,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
               ? eventMonitorsSoftwareDim[monitor.id]
               : eventSoftwareDim
             scheduledBrightness[monitor.id] = { brightness, softwareDim }
-            logger.debug(`[schedule] target ${monitor.id} → ${brightness - softwareDim}`)
+            logger.debug(`[schedule] target ${logger.shortId(monitor.id)} → ${brightness - softwareDim}`)
           }
 
           // Skip monitors that are currently inactive-dimmed — they will pick up the new
@@ -4557,11 +4555,11 @@ function handleCommandLine(event, argv, directory, additionalData) {
 
         if (display === "all") {
           logger.debug(`Setting brightness via command line: All @ ${brightness}%`);
-          updateAllBrightness(brightness, type)
+          updateAllBrightness(brightness, type, 'cli')
         } else {
           const newBrightness = Utils.minMax(type === "set" ? brightness : display.brightness + brightness)
           logger.debug(`Setting brightness via command line: Display #${display.num} (${display.name}) @ ${newBrightness}%`);
-          updateBrightnessThrottle(display.id, newBrightness, true)
+          updateBrightnessThrottle(display.id, newBrightness, true, undefined, undefined, undefined, 'cli')
         }
 
       }
@@ -4790,7 +4788,7 @@ const handleClientMessage = async (message, remote) => {
       const value = parseInt(data.value)
 
       if (data.monitor === "all") {
-        updateAllBrightness(value, (data.mode ?? "set"))
+        updateAllBrightness(value, (data.mode ?? "set"), 'api')
         return true
       }
 
@@ -4799,7 +4797,7 @@ const handleClientMessage = async (message, remote) => {
 
       if (data.vcp === "brightness") {
         const newBrightness = Utils.minMax(data.mode !== "offset" ? value : monitor.brightness + value)
-        updateBrightnessThrottle(monitor.id, newBrightness, true)
+        updateBrightnessThrottle(monitor.id, newBrightness, true, undefined, undefined, undefined, 'api')
       } else {
         monitorsThread.send({
           type: "vcp",
