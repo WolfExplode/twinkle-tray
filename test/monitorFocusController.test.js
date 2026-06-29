@@ -110,6 +110,34 @@ test('cursor returning to dimmed monitor clears inactive offset', () => {
   }
 })
 
+test('mousemove restores inactive-dimmed monitor even while idle flags are set', () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  try {
+    const { deps, brightnessController, idle } = makeDeps()
+    const ctrl = createMonitorFocusController(deps)
+    ctrl.start()
+    mock.timers.tick(2000)
+    assert.strictEqual(ctrl.isDimmed('M2'), true)
+    brightnessController.clearCalls.length = 0
+
+    // Simulate: idle dim applied, then user wakes (both flags briefly still set)
+    idle.userIdleDimmed = true
+    idle.isWindowsUserIdle = true
+
+    ctrl.handleMouseMove(150, 10)
+
+    assert.strictEqual(ctrl.isDimmed('M2'), false, 'inactive dim cleared despite idle flags')
+    assert.ok(
+      brightnessController.clearCalls.some(c => c.monitorId === 'M2' && c.type === 'inactive'),
+      'clearDimOffset(inactive) called for M2'
+    )
+
+    ctrl.stop()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 test('reset clears all dim state via controller', () => {
   mock.timers.enable({ apis: ['setInterval', 'Date'] })
   try {

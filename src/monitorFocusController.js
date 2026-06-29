@@ -95,7 +95,7 @@ function createMonitorFocusController(deps) {
   }
 
   function handleMonitorFocusMouseMove(x, y) {
-    if (!settings.monitorFocusEnabled || !monitors || store.get("idle").userIdleDimmed || store.get("idle").isWindowsUserIdle) return
+    if (!settings.monitorFocusEnabled || !monitors) return
     if (tempSettings.pauseIdleDetection) return
 
     const now = Date.now()
@@ -104,11 +104,16 @@ function createMonitorFocusController(deps) {
     const activeMonitor = getActiveMonitorFromPoint(x, y)
     if (!activeMonitor) return
 
+    // Always restore when mouse enters an inactive-dimmed monitor, even during/just-after idle.
+    // clearDimmedStateAfterIdle preserves dim on non-active monitors for this path to clear.
     if (monitorFocusDimmed.has(activeMonitor.id)) {
       restoreMonitorFocusBrightness(activeMonitor)
       monitorLastVisited[activeMonitor.id] = now
       return
     }
+
+    // Don't update tracking or trigger new dims during idle
+    if (store.get("idle").userIdleDimmed || store.get("idle").isWindowsUserIdle) return
 
     if (now - lastMonitorFocusMove < 250) return
     lastMonitorFocusMove = now
