@@ -60,12 +60,21 @@ function createMonitorFocusController(deps) {
     const durationMs = Math.max(100, settings.monitorFocusTransitionDuration ?? 1000)
     const canonicalBrightness = brightnessController.getCanonical(monitor.id).brightness
     const inactiveOffset = Math.max(0, canonicalBrightness - targetBrightness)
-    brightnessController.animateTo(monitor.id, 'inactiveOffset', inactiveOffset, durationMs)
-    // Apply inactive software dim immediately (software dim track animation deferred)
-    if (targetSoftwareDim !== (softwareDimLevels[monitor.id] || 0)) {
-      updateSoftwareDim(monitor.id, targetSoftwareDim)
+
+    // Split duration 50/50 when both phases apply (see ADR 0004). Hardware runs
+    // first so DDC and overlay opacity never animate simultaneously — simultaneous
+    // animation triggers MPO flicker on Windows. The split is not perceptually
+    // linear (no reliable way to equate DDC units to overlay opacity across
+    // monitor brands), so a flat 50/50 is used as a pragmatic default.
+    const hardwareDuration = targetSoftwareDim > 0 ? Math.floor(durationMs / 2) : durationMs
+    const softwareDuration = durationMs - hardwareDuration
+
+    logger.debug(`[monitorFocus][diag] applyTransition ${logger.shortId(monitor.id)}: canonical=${canonicalBrightness} targetHw=${targetBrightness} targetSwDim=${targetSoftwareDim} offset=${inactiveOffset} hwDur=${hardwareDuration}ms swDur=${softwareDuration}ms`)
+    brightnessController.animateTo(monitor.id, 'inactiveOffset', inactiveOffset, hardwareDuration)
+    if (targetSoftwareDim > 0) {
+      brightnessController.animateTo(monitor.id, 'inactiveSoftwareDim', targetSoftwareDim, softwareDuration, { startDelay: hardwareDuration })
     }
-    logger.debug(`[monitorFocus] dimming inactive monitor ${logger.shortId(monitor.id)} — offset=${inactiveOffset} duration=${durationMs}ms`)
+    logger.debug(`[monitorFocus] dimming inactive monitor ${logger.shortId(monitor.id)} — offset=${inactiveOffset} swDim=${targetSoftwareDim} hwDuration=${hardwareDuration}ms swDuration=${softwareDuration}ms`)
   }
 
   function restoreMonitorFocusBrightness(monitor) {
@@ -130,6 +139,7 @@ function createMonitorFocusController(deps) {
       const dimLevel = settings.monitorFocusDimLevel ?? 0
       const softwareDimTarget = settings.monitorFocusSoftwareDim ?? 0
       const currentSoftwareDim = softwareDimLevels[monitor.id] || 0
+      logger.debug(`[monitorFocus][diag] ${logger.shortId(monitor.id)} — raw settings: monitorFocusDimLevel=${settings.monitorFocusDimLevel} monitorFocusSoftwareDim=${settings.monitorFocusSoftwareDim} → dimLevel=${dimLevel} softwareDimTarget=${softwareDimTarget} currentSwDim=${currentSoftwareDim} monitorBrightness=${monitor.brightness}`)
       if (!MonitorFocus.shouldDimMonitor({ now, lastVisited, timeout, brightness: monitor.brightness, dimLevel, currentSoftwareDim, softwareDimTarget })) {
         logger.debug(`[monitorFocus] skipping dim [${logger.shortId(monitor.id)}] — already at or below dim target`)
         continue

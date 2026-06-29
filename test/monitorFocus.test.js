@@ -7,7 +7,6 @@ const {
   monitorIdAtPoint,
   computeTimeoutMs,
   shouldDimMonitor,
-  computeTransitionStep,
 } = require('../src/monitorFocus')
 
 // Helpers: Electron-style display (flat bounds) and tray monitor (nested position).
@@ -75,35 +74,4 @@ test('shouldDimMonitor: skips when already at or below the dim target', () => {
   assert.strictEqual(shouldDimMonitor({ ...due, brightness: 20, currentSoftwareDim: 10 }), true)
 })
 
-test('computeTransitionStep interpolates pure DDC brightness and rounds', () => {
-  const args = { startBrightness: 0, targetBrightness: 100, startSoftwareDim: 0, targetSoftwareDim: 0 }
-  assert.deepStrictEqual(computeTransitionStep({ ...args, progress: 0 }), { brightness: 0, softwareDim: 0 })
-  assert.deepStrictEqual(computeTransitionStep({ ...args, progress: 0.5 }), { brightness: 50, softwareDim: 0 })
-  assert.deepStrictEqual(computeTransitionStep({ ...args, progress: 1 }), { brightness: 100, softwareDim: 0 })
-  // brightness is rounded
-  assert.strictEqual(computeTransitionStep({ ...args, progress: 0.333 }).brightness, 33)
-})
-
-test('computeTransitionStep ramps DDC to 0 before any software dim (no overlap)', () => {
-  // Single signed axis: brightness 100 -> software dim 30 means combined 100 -> -30.
-  // DDC must reach 0 first, then the overlay starts; the two never move together.
-  const args = { startBrightness: 100, targetBrightness: 0, startSoftwareDim: 0, targetSoftwareDim: 30 }
-  // Total span 130. Crossover (combined 0) at 100/130 ≈ 0.769.
-  assert.deepStrictEqual(computeTransitionStep({ ...args, progress: 0 }), { brightness: 100, softwareDim: 0 })
-  // First phase: DDC falling, overlay still 0.
-  assert.deepStrictEqual(computeTransitionStep({ ...args, progress: 0.5 }), { brightness: 35, softwareDim: 0 })
-  // At crossover, both effectively 0.
-  assert.deepStrictEqual(computeTransitionStep({ ...args, progress: 100 / 130 }), { brightness: 0, softwareDim: 0 })
-  // Second phase: DDC pinned at 0, overlay rising.
-  const mid2 = computeTransitionStep({ ...args, progress: 0.9 })
-  assert.strictEqual(mid2.brightness, 0)
-  assert.ok(mid2.softwareDim > 0 && mid2.softwareDim < 30)
-  assert.deepStrictEqual(computeTransitionStep({ ...args, progress: 1 }), { brightness: 0, softwareDim: 30 })
-})
-
-test('computeTransitionStep clamps progress to 0..1', () => {
-  const args = { startBrightness: 10, targetBrightness: 90, startSoftwareDim: 0, targetSoftwareDim: 0 }
-  assert.strictEqual(computeTransitionStep({ ...args, progress: -1 }).brightness, 10)
-  assert.strictEqual(computeTransitionStep({ ...args, progress: 5 }).brightness, 90)
-})
 

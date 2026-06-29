@@ -38,7 +38,7 @@ function createBrightnessController(deps) {
   const offsets = {}
 
   function getOffsets(monitorId) {
-    return offsets[monitorId] || { idle: 0, inactive: 0 }
+    return offsets[monitorId] || { idle: 0, inactive: 0, inactiveSoftwareDim: 0 }
   }
 
   // commanded brightness = canonical.brightness - max(idleOffset, inactiveOffset)
@@ -189,6 +189,7 @@ function createBrightnessController(deps) {
     for (const key in animTracks) {
       const track = animTracks[key]
       const elapsed = now - track.startTime
+      if (elapsed < 0) { anyActive = true; continue }
       const progress = track.durationMs > 0 ? Math.min(1, elapsed / track.durationMs) : 1
       const value = track.startValue + (track.targetValue - track.startValue) * progress
 
@@ -250,6 +251,12 @@ function createBrightnessController(deps) {
       case 'inactiveOffset':
         offsets[monitorId] = { ...getOffsets(monitorId), inactive: Math.max(0, value) }
         break
+      case 'inactiveSoftwareDim': {
+        const sv = Math.max(0, value)
+        offsets[monitorId] = { ...getOffsets(monitorId), inactiveSoftwareDim: sv }
+        updateSoftwareDim(monitorId, Math.min(100, (getCanonical(monitorId).softwareDim || 0) + sv))
+        break
+      }
       default:
         logger.debug(`[brightnessCtrl] unknown animatable property: ${property}`)
     }
@@ -263,6 +270,7 @@ function createBrightnessController(deps) {
       case 'canonical.highlightCompression': return getCanonical(monitorId).highlightCompression
       case 'idleOffset':                  return getOffsets(monitorId).idle
       case 'inactiveOffset':              return getOffsets(monitorId).inactive
+      case 'inactiveSoftwareDim':         return getOffsets(monitorId).inactiveSoftwareDim || 0
       default: return 0
     }
   }
@@ -290,12 +298,17 @@ function createBrightnessController(deps) {
     if (source === 'manual') {
       delete animTracks[`${monitorId}:idleOffset`]
       delete animTracks[`${monitorId}:inactiveOffset`]
+      delete animTracks[`${monitorId}:inactiveSoftwareDim`]
     }
 
     canonical[monitorId] = { ...getCanonical(monitorId), ...newSettings }
 
     if (source === 'manual') {
-      offsets[monitorId] = { idle: 0, inactive: 0 }
+      const prevInactiveSwDim = getOffsets(monitorId).inactiveSoftwareDim || 0
+      offsets[monitorId] = { idle: 0, inactive: 0, inactiveSoftwareDim: 0 }
+      if (prevInactiveSwDim > 0 && newSettings.softwareDim === undefined) {
+        updateSoftwareDim(monitorId, canonical[monitorId].softwareDim || 0)
+      }
     }
 
     const commanded = computeCommandedBrightness(monitorId)
@@ -319,7 +332,11 @@ function createBrightnessController(deps) {
       canonical[monitorId] = { ...getCanonical(monitorId), ...newSettings }
 
       if (source === 'manual') {
-        offsets[monitorId] = { idle: 0, inactive: 0 }
+        const prevInactiveSwDim = getOffsets(monitorId).inactiveSoftwareDim || 0
+        offsets[monitorId] = { idle: 0, inactive: 0, inactiveSoftwareDim: 0 }
+        if (prevInactiveSwDim > 0 && newSettings.softwareDim === undefined) {
+          updateSoftwareDim(monitorId, canonical[monitorId].softwareDim || 0)
+        }
       }
 
       const commanded = computeCommandedBrightness(monitorId)
@@ -347,10 +364,22 @@ function createBrightnessController(deps) {
   }
 
   function clearDimOffset(monitorId, type) {
-    setDimOffset(monitorId, type, 0)
+    if (type === 'inactive') {
+      delete animTracks[`${monitorId}:inactiveOffset`]
+      delete animTracks[`${monitorId}:inactiveSoftwareDim`]
+      offsets[monitorId] = { ...getOffsets(monitorId), inactive: 0, inactiveSoftwareDim: 0 }
+      updateSoftwareDim(monitorId, getCanonical(monitorId).softwareDim || 0)
+      const commanded = computeCommandedBrightness(monitorId)
+      syncMonitorObject(monitorId)
+      lastCommandedBrightness[monitorId] = commanded
+      enqueueDDC(monitorId, commanded)
+      touchMonitors()
+    } else {
+      setDimOffset(monitorId, type, 0)
+    }
   }
 
-  function animateTo(monitorId, property, targetValue, durationMs) {
+  function animateTo(monitorId, property, targetValue, durationMs, { startDelay = 0 } = {}) {
     if (!canonical[monitorId]) {
       logger.debug(`[brightnessCtrl] animateTo skipped — no canonical for ${logger.shortId(monitorId)}`)
       return
@@ -376,7 +405,7 @@ function createBrightnessController(deps) {
       property,
       startValue: currentTrackValue(monitorId, property),
       targetValue,
-      startTime: Date.now(),
+      startTime: Date.now() + startDelay,
       durationMs,
     }
 

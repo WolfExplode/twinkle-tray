@@ -56,30 +56,10 @@ function shouldDimMonitor({ now, lastVisited, timeout, brightness, dimLevel, cur
   return true
 }
 
-// One interpolation step of a focus transition, modelled as a single signed
-// "combined" axis: positive = DDC brightness (0..100), negative = software dim
-// (0..softwareDimMax), matching the slider semantics used everywhere else
-// (splitAdjustmentLevel / getAdjustmentLevel). Collapsing both dim methods onto
-// one line means the ramp crosses zero exactly once, so the DDC portion finishes
-// (reaches 0) before the software overlay starts — the two never move at the same
-// time, which is what caused the dim/real-dim fight and flicker. Brightness is
-// rounded (it drives a DDC write); software dim stays fractional for a smooth fade.
-function computeTransitionStep({ startBrightness, targetBrightness, startSoftwareDim = 0, targetSoftwareDim = 0, progress }) {
-  const p = Math.min(1, Math.max(0, progress))
-  const startCombined = startBrightness - startSoftwareDim
-  const targetCombined = targetBrightness - targetSoftwareDim
-  const combined = startCombined + (targetCombined - startCombined) * p
-  return {
-    brightness: Math.round(Math.max(0, combined)),
-    softwareDim: Math.max(0, -combined)
-  }
-}
-
 module.exports = {
   buildMonitorMap,
   findDisplayAtPoint,
   monitorIdAtPoint,
   computeTimeoutMs,
   shouldDimMonitor,
-  computeTransitionStep,
 }

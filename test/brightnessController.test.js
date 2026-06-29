@@ -209,6 +209,76 @@ test('simultaneous idle + inactive offsets: max() applied, not additive', () => 
   }
 })
 
+test('inactiveSoftwareDim animates and calls updateSoftwareDim on each tick', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { deps, softwareDimCalls } = makeDeps()
+    const ctrl = createBrightnessController(deps)
+    ctrl.initFromMonitor('M1', { brightness: 0, softwareDim: 0 })
+    softwareDimCalls.length = 0
+
+    ctrl.animateTo('M1', 'inactiveSoftwareDim', 30, 1000)
+
+    // No immediate call — animation hasn't ticked yet
+    assert.strictEqual(softwareDimCalls.length, 0, 'no immediate call before first tick')
+
+    mock.timers.tick(TICK_MS)
+    assert.ok(softwareDimCalls.length > 0, 'updateSoftwareDim called after first tick')
+    assert.ok(softwareDimCalls.at(-1).val > 0, 'softwareDim > 0 mid-animation')
+    assert.ok(softwareDimCalls.at(-1).val < 30, 'softwareDim < 30 mid-animation')
+
+    mock.timers.tick(1000)
+    assert.strictEqual(softwareDimCalls.at(-1).val, 30, 'softwareDim reaches target at end')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('clearDimOffset(inactive) cancels inactiveSoftwareDim animation and restores software dim', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { deps, softwareDimCalls } = makeDeps()
+    const ctrl = createBrightnessController(deps)
+    ctrl.initFromMonitor('M1', { brightness: 80, softwareDim: 0 })
+
+    ctrl.animateTo('M1', 'inactiveOffset', 80, 1000)
+    ctrl.animateTo('M1', 'inactiveSoftwareDim', 30, 1000)
+    mock.timers.tick(500)
+    softwareDimCalls.length = 0
+
+    ctrl.clearDimOffset('M1', 'inactive')
+
+    assert.ok(softwareDimCalls.some(c => c.id === 'M1' && c.val === 0), 'software dim restored to canonical (0)')
+    assert.strictEqual(ctrl.getCommandedBrightness('M1'), 80, 'hardware commanded restored to canonical')
+
+    // Tick should not advance the cancelled animation
+    mock.timers.tick(1000)
+    assert.ok(!softwareDimCalls.some(c => c.val === 30), 'animation did not complete after clear')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('manual setCanonical clears inactiveSoftwareDim overlay', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { deps, softwareDimCalls } = makeDeps()
+    const ctrl = createBrightnessController(deps)
+    ctrl.initFromMonitor('M1', { brightness: 0, softwareDim: 0 })
+
+    ctrl.animateTo('M1', 'inactiveSoftwareDim', 30, 1000)
+    mock.timers.tick(1000)
+    assert.strictEqual(softwareDimCalls.at(-1).val, 30, 'software dim at 30 after animation')
+    softwareDimCalls.length = 0
+
+    ctrl.setCanonical('M1', { brightness: 50 }, 'manual')
+
+    assert.ok(softwareDimCalls.some(c => c.id === 'M1' && c.val === 0), 'software dim cleared on manual write')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 test('clearing dim offsets restores commanded to canonical', () => {
   mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
   try {

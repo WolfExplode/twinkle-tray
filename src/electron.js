@@ -1455,8 +1455,8 @@ function applyNavigationGuards(win) {
 // map is seeded into the "color" slice there; we alias the same references back
 // here so the rest of electron.js (and the monitor-focus controller) keep using
 // them unchanged.
-const softwareDim = createSoftwareDim({ BrowserWindow, screen, store, monitors, MonitorTransforms })
-const { softwareDimLevels, updateSoftwareDim, hideSoftwareDimOverlays, showSoftwareDimOverlays } = softwareDim
+const softwareDim = createSoftwareDim({ BrowserWindow, screen, store, monitors, MonitorTransforms, logger })
+const { softwareDimLevels, updateSoftwareDim, preWarmOverlay, hideSoftwareDimOverlays, showSoftwareDimOverlays } = softwareDim
 
 // Schedule resolver: binds the pure ./adjustmentTimes.js rules to the live
 // `settings` + SunCalc. One shared instance is the single source of truth for
@@ -1800,6 +1800,7 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
           warmth:               6500,
           highlightCompression: 0,
         })
+        preWarmOverlay(id)
       }
 
     }
