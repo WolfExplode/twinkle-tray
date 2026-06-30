@@ -92,14 +92,6 @@ function createSoftwareDim(deps) {
     }
   }
 
-  function hideSoftwareDimOverlays() {
-    for (const id in softwareDimOverlays) {
-      if (!softwareDimOverlays[id].isDestroyed()) {
-        softwareDimOverlays[id].hide()
-      }
-    }
-  }
-
   function showSoftwareDimOverlays() {
     for (const id in softwareDimLevels) {
       if (softwareDimLevels[id] > 0) {
@@ -111,7 +103,6 @@ function createSoftwareDim(deps) {
   return {
     softwareDimLevels,
     updateSoftwareDim,
-    hideSoftwareDimOverlays,
     showSoftwareDimOverlays
   }
 }

@@ -105,10 +105,6 @@ function createDisplayColor(deps) {
     sendToAllWindows('highlight-levels-updated', highlightLevels)
   }
 
-  function hideDisplayColorEffects() {
-    ColorGamma.resetAllGammaRamps()
-  }
-
   function showDisplayColorEffects() {
     const ids = new Set([...Object.keys(warmthLevels), ...Object.keys(highlightLevels)])
     for (const id of ids) {
@@ -231,7 +227,6 @@ function createDisplayColor(deps) {
     updateWarmth,
     updateHighlightCompression,
     sendDisplayColorLevels,
-    hideDisplayColorEffects,
     showDisplayColorEffects,
     getScheduledColorForMonitor,
     applyCurrentDisplayColorEffects,

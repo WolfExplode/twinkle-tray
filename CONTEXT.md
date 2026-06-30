@@ -37,6 +37,8 @@ Because JS is single-threaded, no mutex is needed for reads/writes to in-memory 
 ## Software Dim
 A separate overlay (e.g. color filter or opacity layer) applied in addition to DDC brightness. Tracked independently per monitor. Part of commanded brightness calculation.
 
+**Negative brightness values mean software dim.** When a brightness value is negative (e.g. `-20`), that magnitude is the software dim level (20% overlay). The DDC hardware brightness is 0% and the softwareDim overlay carries the remaining dim. This appears in logs as `[applyProfile] MONITOR → -20` — the logged value is `monitor.brightness - (monitor.softwareDim || 0)`, so a negative result means softwareDim exceeds the raw brightness value.
+
 ## refreshMonitors
 A polling operation that reads current hardware state and updates the in-memory monitor map. Responsible for detecting monitor connection/disconnection and DDC capability changes. Must not overwrite canonical brightness after startup — brightness authority belongs to the control hierarchy, not the poller.
 

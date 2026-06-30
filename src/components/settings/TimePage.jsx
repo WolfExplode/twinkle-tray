@@ -132,14 +132,15 @@ export default function TimePage({ self }) {
                         />
                     } />
                 </SettingsOption>
-                <SettingsOption title="Dim transition" description="How long the dim animation takes.">
+                <SettingsOption title="Animate brightness changes" description="When off, brightness changes instantly instead of fading. Disable if your monitor flickers during DDC updates." input={self.renderToggle("brightnessAnimationEnabled")} />
+                {window.settings.brightnessAnimationEnabled !== false && <SettingsOption title="Dim transition speed" description="How fast the dim animation runs (brightness units per second). Higher = faster.">
                     <SettingsChild content={
                         <div>
-                            <label style={{ "textTransform": "capitalize" }}>{T.t("GENERIC_SECONDS")}</label>
-                            <input type="number" min="0" max="10" step="0.5" value={(window.settings.monitorFocusTransitionDuration ?? 1000) / 1000} onChange={(e) => self.setSetting("monitorFocusTransitionDuration", Math.round(parseFloat(e.target.value) * 1000))} />
+                            <label style={{ "textTransform": "capitalize" }}>units/s</label>
+                            <input type="number" min="1" max="100" step="1" value={window.settings.monitorFocusTransitionRate ?? 20} onChange={(e) => self.setSetting("monitorFocusTransitionRate", Math.max(1, parseInt(e.target.value) || 1))} />
                         </div>
                     } />
-                </SettingsOption>
+                </SettingsOption>}
             </div>
         </>
     )

@@ -57,19 +57,18 @@ function createMonitorFocusController(deps) {
   }
 
   function applyMonitorFocusTransition(monitor, targetBrightness, targetSoftwareDim = 0) {
-    const durationMs = Math.max(100, settings.monitorFocusTransitionDuration ?? 1000)
+    const rate = Math.max(1, settings.monitorFocusTransitionRate ?? 20) // brightness units per second
     const canonicalBrightness = brightnessController.getCanonical(monitor.id).brightness
     const inactiveOffset = Math.max(0, canonicalBrightness - targetBrightness)
 
-    // Split duration 50/50 when both phases apply (see ADR 0004). Hardware runs
-    // first so DDC and overlay opacity never animate simultaneously — simultaneous
-    // animation triggers MPO flicker on Windows. The split is not perceptually
-    // linear (no reliable way to equate DDC units to overlay opacity across
-    // monitor brands), so a flat 50/50 is used as a pragmatic default.
-    const hardwareDuration = targetSoftwareDim > 0 ? Math.floor(durationMs / 2) : durationMs
-    const softwareDuration = durationMs - hardwareDuration
+    // Hardware runs first so DDC and overlay opacity never animate simultaneously —
+    // simultaneous animation triggers MPO flicker on Windows (see ADR 0004).
+    // Each phase duration scales with its own Δ at the configured rate.
+    const animate = settings.brightnessAnimationEnabled !== false
+    const hardwareDuration = animate ? Math.max(100, (inactiveOffset / rate) * 1000) : 0
+    const softwareDuration = (animate && targetSoftwareDim > 0) ? Math.max(100, (targetSoftwareDim / rate) * 1000) : 0
 
-    logger.debug(`[monitorFocus][diag] applyTransition ${logger.shortId(monitor.id)}: canonical=${canonicalBrightness} targetHw=${targetBrightness} targetSwDim=${targetSoftwareDim} offset=${inactiveOffset} hwDur=${hardwareDuration}ms swDur=${softwareDuration}ms`)
+    logger.debug(`[monitorFocus][diag] applyTransition ${logger.shortId(monitor.id)}: canonical=${canonicalBrightness} targetHw=${targetBrightness} targetSwDim=${targetSoftwareDim} offset=${inactiveOffset} rate=${rate} hwDur=${hardwareDuration}ms swDur=${softwareDuration}ms`)
     brightnessController.animateTo(monitor.id, 'inactiveOffset', inactiveOffset, hardwareDuration)
     if (targetSoftwareDim > 0) {
       brightnessController.animateTo(monitor.id, 'inactiveSoftwareDim', targetSoftwareDim, softwareDuration, { startDelay: hardwareDuration })

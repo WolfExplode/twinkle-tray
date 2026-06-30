@@ -536,7 +536,8 @@ const defaultSettings = {
   monitorFocusSeconds: 0,
   monitorFocusDimLevel: 0,
   monitorFocusSoftwareDim: 0,
-  monitorFocusTransitionDuration: 1000,
+  monitorFocusTransitionRate: 20,
+  brightnessAnimationEnabled: true,
   softwareDimMax: 100,
   idleRestoreSeconds: 0,
   wakeRestoreSeconds: 0,
@@ -948,7 +949,7 @@ function logSettingsSnapshot(label = "settings") {
     `[${label}]` +
     ` idle=${settings.detectIdleTimeEnabled} threshold=${idleThresholdSecs}s idleBrightness=${settings.detectIdleBrightness}` +
     ` | schedule=${settings.adjustmentTimesActive} pause=${tempSettings.pauseTimeAdjustments} animate=${settings.adjustmentTimeAnimate} individualDisplays=${settings.adjustmentTimeIndividualDisplays} events=${settings.adjustmentTimes?.length ?? 0}` +
-    ` | monitorFocus=${settings.monitorFocusEnabled} timeout=${(settings.monitorFocusMinutes||0)*60+(settings.monitorFocusSeconds||0)}s dimLevel=${settings.monitorFocusDimLevel} softwareDim=${settings.monitorFocusSoftwareDim} transition=${settings.monitorFocusTransitionDuration}ms`
+    ` | monitorFocus=${settings.monitorFocusEnabled} timeout=${(settings.monitorFocusMinutes||0)*60+(settings.monitorFocusSeconds||0)}s dimLevel=${settings.monitorFocusDimLevel} softwareDim=${settings.monitorFocusSoftwareDim} transitionRate=${settings.monitorFocusTransitionRate}units/s`
   )
 }
 
@@ -1461,7 +1462,7 @@ function applyNavigationGuards(win) {
 // here so the rest of electron.js (and the monitor-focus controller) keep using
 // them unchanged.
 const softwareDim = createSoftwareDim({ BrowserWindow, screen, store, monitors, MonitorTransforms, logger })
-const { softwareDimLevels, updateSoftwareDim, hideSoftwareDimOverlays, showSoftwareDimOverlays } = softwareDim
+const { softwareDimLevels, updateSoftwareDim, showSoftwareDimOverlays } = softwareDim
 
 // Schedule resolver: binds the pure ./adjustmentTimes.js rules to the live
 // `settings` + SunCalc. One shared instance is the single source of truth for
@@ -1494,7 +1495,6 @@ const {
   updateWarmth,
   updateHighlightCompression,
   sendDisplayColorLevels,
-  hideDisplayColorEffects,
   showDisplayColorEffects,
   applyCurrentDisplayColorEffects,
   getCurrentKelvin,
@@ -2035,7 +2035,7 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
     const targetBrightness = usePerMonitor && eventMonitors[monitor.id] >= 0 ? eventMonitors[monitor.id] : level
     const targetDim = usePerMonitor && eventMonitorsSoftwareDim[monitor.id] >= 0 ? eventMonitorsSoftwareDim[monitor.id] : softwareDimLevel
     const range = Math.abs(targetBrightness - brightnessController.getCanonical(monitor.id).brightness)
-    const durationMs = step > 0 ? (range / step) * baseIntervalMs : 0
+    const durationMs = (settings.brightnessAnimationEnabled !== false && step > 0) ? (range / step) * baseIntervalMs : 0
 
     brightnessController.animateTo(monitor.id, 'canonical.brightness', targetBrightness, durationMs)
     brightnessController.animateTo(monitor.id, 'canonical.softwareDim', targetDim, durationMs)
@@ -2508,8 +2508,6 @@ function createPanel(toggleOnLoad = false, isRefreshing = false, showOnLoad = tr
         // Idle
         if(!store.get("idle").isWindowsUserIdle) {
           logger.debug("Displays have gone to sleep.")
-          hideSoftwareDimOverlays()
-          hideDisplayColorEffects()
 
           // If we were about to do a hardware event, stop.
           if (handleChangeTimeout1) clearTimeout(handleChangeTimeout1);
