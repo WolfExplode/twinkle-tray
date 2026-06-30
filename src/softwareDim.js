@@ -31,47 +31,6 @@ function createSoftwareDim(deps) {
     return pair ? pair.display.bounds : null
   }
 
-  function createOverlayWindow(monitorId, bounds) {
-    const win = new BrowserWindow({
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: bounds.height,
-      frame: false,
-      backgroundColor: '#000000',
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      resizable: false,
-      focusable: false,
-      hasShadow: false,
-      show: false,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        devTools: false
-      }
-    })
-    win.setIgnoreMouseEvents(true)
-    win.setAlwaysOnTop(true, 'screen-saver')
-    win.setOpacity(0)
-    win.showInactive()
-    win.loadURL('data:text/html,<body style="background:#000;margin:0"></body>')
-    softwareDimOverlays[monitorId] = win
-    return win
-  }
-
-  // Pre-warm the overlay window for a monitor at opacity 0 so it is already
-  // inserted into the DWM composition stack before animation starts. Without
-  // this, the first showInactive() call mid-animation causes a single-frame
-  // DWM compositor flash (brief brightness spike) as the layer is inserted.
-  function preWarmOverlay(monitorId) {
-    if (softwareDimOverlays[monitorId] && !softwareDimOverlays[monitorId].isDestroyed()) return
-    const bounds = getSoftwareDimDisplayBounds(monitorId)
-    if (!bounds) return
-    createOverlayWindow(monitorId, bounds)
-    logger?.debug(`[softwareDim] pre-warmed overlay for ${monitorId}`)
-  }
-
   function updateSoftwareDim(monitorId, level) {
     level = Math.max(0, Math.min(100, level))
     softwareDimLevels[monitorId] = level
@@ -89,7 +48,7 @@ function createSoftwareDim(deps) {
 
     if (level === 0) {
       if (softwareDimOverlays[monitorId] && !softwareDimOverlays[monitorId].isDestroyed()) {
-        softwareDimOverlays[monitorId].setOpacity(0)
+        softwareDimOverlays[monitorId].hide()
       }
       return
     }
@@ -99,18 +58,44 @@ function createSoftwareDim(deps) {
     if (!bounds) return
 
     if (!softwareDimOverlays[monitorId] || softwareDimOverlays[monitorId].isDestroyed()) {
-      const win = createOverlayWindow(monitorId, bounds)
+      const win = new BrowserWindow({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        frame: false,
+        backgroundColor: '#000000',
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: false,
+        focusable: false,
+        hasShadow: false,
+        show: false,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+          devTools: false
+        }
+      })
+      win.setIgnoreMouseEvents(true)
+      win.setAlwaysOnTop(true, 'screen-saver')
       win.setOpacity(level / 100)
+      win.showInactive()
+      win.loadURL('data:text/html,<body style="background:#000;margin:0"></body>')
+      softwareDimOverlays[monitorId] = win
     } else {
       softwareDimOverlays[monitorId].setBounds(bounds)
       softwareDimOverlays[monitorId].setOpacity(level / 100)
+      if (!softwareDimOverlays[monitorId].isVisible()) {
+        softwareDimOverlays[monitorId].showInactive()
+      }
     }
   }
 
   function hideSoftwareDimOverlays() {
     for (const id in softwareDimOverlays) {
       if (!softwareDimOverlays[id].isDestroyed()) {
-        softwareDimOverlays[id].setOpacity(0)
+        softwareDimOverlays[id].hide()
       }
     }
   }
@@ -126,7 +111,6 @@ function createSoftwareDim(deps) {
   return {
     softwareDimLevels,
     updateSoftwareDim,
-    preWarmOverlay,
     hideSoftwareDimOverlays,
     showSoftwareDimOverlays
   }

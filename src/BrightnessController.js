@@ -254,7 +254,7 @@ function createBrightnessController(deps) {
       case 'inactiveSoftwareDim': {
         const sv = Math.max(0, value)
         offsets[monitorId] = { ...getOffsets(monitorId), inactiveSoftwareDim: sv }
-        updateSoftwareDim(monitorId, Math.min(100, (getCanonical(monitorId).softwareDim || 0) + sv))
+        updateSoftwareDim(monitorId, Math.max(getCanonical(monitorId).softwareDim || 0, sv))
         break
       }
       default:
@@ -290,6 +290,25 @@ function createBrightnessController(deps) {
   // Public API
   // ---------------------------------------------------------------------------
 
+  // When canonical softwareDim changes, re-apply any existing inactiveSoftwareDim offset
+  // so inactive monitors don't lose their dim overlay. Uses max() — same policy as
+  // hardware offsets — so inactive dim and schedule dim don't stack, the larger wins.
+  // If an animation is pending or in-flight, snap it to its target — the new canonical
+  // value takes effect immediately and the animation delay no longer applies.
+  function applyCanonicalSoftwareDim(monitorId, softwareDim) {
+    const key = `${monitorId}:inactiveSoftwareDim`
+    const track = animTracks[key]
+    if (track) {
+      delete animTracks[key]
+      const sv = Math.max(0, track.targetValue)
+      offsets[monitorId] = { ...getOffsets(monitorId), inactiveSoftwareDim: sv }
+      updateSoftwareDim(monitorId, Math.max(softwareDim, sv))
+    } else {
+      const sv = getOffsets(monitorId).inactiveSoftwareDim || 0
+      updateSoftwareDim(monitorId, Math.max(softwareDim, sv))
+    }
+  }
+
   function setCanonical(monitorId, newSettings, source) {
     // Cancel in-flight animations for any property being explicitly set.
     for (const prop of Object.keys(newSettings)) {
@@ -316,7 +335,7 @@ function createBrightnessController(deps) {
     lastCommandedBrightness[monitorId] = commanded
     enqueueDDC(monitorId, commanded)
 
-    if (newSettings.softwareDim !== undefined)        updateSoftwareDim(monitorId, newSettings.softwareDim)
+    if (newSettings.softwareDim !== undefined)        applyCanonicalSoftwareDim(monitorId, newSettings.softwareDim)
     if (newSettings.warmth !== undefined)             updateDisplayColor(monitorId, { kelvin: newSettings.warmth })
     if (newSettings.highlightCompression !== undefined) updateDisplayColor(monitorId, { highlightWeight: newSettings.highlightCompression })
 
@@ -344,7 +363,7 @@ function createBrightnessController(deps) {
       lastCommandedBrightness[monitorId] = commanded
       enqueueDDC(monitorId, commanded)
 
-      if (newSettings.softwareDim !== undefined)        updateSoftwareDim(monitorId, newSettings.softwareDim)
+      if (newSettings.softwareDim !== undefined)        applyCanonicalSoftwareDim(monitorId, newSettings.softwareDim)
       if (newSettings.warmth !== undefined)             updateDisplayColor(monitorId, { kelvin: newSettings.warmth })
       if (newSettings.highlightCompression !== undefined) updateDisplayColor(monitorId, { highlightWeight: newSettings.highlightCompression })
     }

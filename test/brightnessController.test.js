@@ -259,6 +259,80 @@ test('clearDimOffset(inactive) cancels inactiveSoftwareDim animation and restore
   }
 })
 
+test('schedule setCanonical during pending inactiveSoftwareDim (startDelay) snaps dim — max() wins, no stacking', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { deps, softwareDimCalls } = makeDeps()
+    const ctrl = createBrightnessController(deps)
+    ctrl.initFromMonitor('M1', { brightness: 0, softwareDim: 0 })
+
+    // Inactive dim: hardware runs first (2500ms), then swDim animation starts after delay
+    ctrl.animateTo('M1', 'inactiveOffset', 0, 2500)
+    ctrl.animateTo('M1', 'inactiveSoftwareDim', 30, 2500, { startDelay: 2500 })
+
+    // Schedule fires 1852ms in — swDim animation hasn't started yet (startDelay=2500ms)
+    mock.timers.tick(1852)
+    softwareDimCalls.length = 0
+
+    ctrl.setCanonical('M1', { softwareDim: 20 }, 'schedule')
+
+    // max(canonical=20, inactive=30) = 30, not 50
+    const last = softwareDimCalls.at(-1)
+    assert.ok(last && last.val === 30, `expected swDim=30 got ${last?.val}`)
+
+    // Tick past the original startDelay — animation is cancelled, overlay stays at 30
+    softwareDimCalls.length = 0
+    mock.timers.tick(2500)
+    const afterTick = softwareDimCalls.filter(c => c.id === 'M1')
+    assert.ok(!afterTick.some(c => c.val > 30), 'overlay must not exceed 30 after tick (animation was cancelled)')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('schedule setCanonical while inactiveSoftwareDim in-flight snaps to target immediately — max() wins', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { deps, softwareDimCalls } = makeDeps()
+    const ctrl = createBrightnessController(deps)
+    ctrl.initFromMonitor('M1', { brightness: 0, softwareDim: 0 })
+
+    ctrl.animateTo('M1', 'inactiveSoftwareDim', 30, 1000)
+    mock.timers.tick(500) // mid-animation, currently at ~15
+    softwareDimCalls.length = 0
+
+    ctrl.setCanonical('M1', { softwareDim: 20 }, 'schedule')
+
+    // max(canonical=20, inactive=30) = 30
+    const last = softwareDimCalls.at(-1)
+    assert.ok(last && last.val === 30, `expected swDim=30 got ${last?.val}`)
+
+    // No further animation — overlay stays at 30
+    softwareDimCalls.length = 0
+    mock.timers.tick(1000)
+    assert.ok(!softwareDimCalls.some(c => c.id === 'M1' && c.val !== 30), 'no further animation after snap')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('inactiveSoftwareDim uses max(): schedule dim larger than inactive dim wins', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { deps, softwareDimCalls } = makeDeps()
+    const ctrl = createBrightnessController(deps)
+    ctrl.initFromMonitor('M1', { brightness: 0, softwareDim: 40 })
+
+    ctrl.animateTo('M1', 'inactiveSoftwareDim', 30, 1000)
+    mock.timers.tick(1000)
+
+    // canonical=40 > inactive=30 → overlay stays at 40, inactive dim has no visible effect
+    assert.strictEqual(softwareDimCalls.at(-1).val, 40, 'canonical dim (40) wins over inactive (30)')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 test('manual setCanonical clears inactiveSoftwareDim overlay', () => {
   mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
   try {

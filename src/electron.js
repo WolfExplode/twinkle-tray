@@ -1461,7 +1461,7 @@ function applyNavigationGuards(win) {
 // here so the rest of electron.js (and the monitor-focus controller) keep using
 // them unchanged.
 const softwareDim = createSoftwareDim({ BrowserWindow, screen, store, monitors, MonitorTransforms, logger })
-const { softwareDimLevels, updateSoftwareDim, preWarmOverlay, hideSoftwareDimOverlays, showSoftwareDimOverlays } = softwareDim
+const { softwareDimLevels, updateSoftwareDim, hideSoftwareDimOverlays, showSoftwareDimOverlays } = softwareDim
 
 // Schedule resolver: binds the pure ./adjustmentTimes.js rules to the live
 // `settings` + SunCalc. One shared instance is the single source of truth for
@@ -1805,7 +1805,6 @@ async function refreshMonitors(fullRefresh = false, bypassRateLimit = false) {
           warmth:               6500,
           highlightCompression: 0,
         })
-        preWarmOverlay(id)
       }
 
     }
