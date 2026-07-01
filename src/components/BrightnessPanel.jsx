@@ -236,12 +236,6 @@ const BrightnessPanel = memo(function BrightnessPanel() {
           updated[key] = incomingDim
           changed = true
         }
-        // If hardware brightness came back above 0, also clear any dim
-        if (newMonitors[key].brightness > 0 && updated[key] > 0) {
-          updated[key] = 0
-          window.updateSoftwareDim(newMonitors[key].id, 0)
-          changed = true
-        }
       }
       return changed ? updated : prev
     })

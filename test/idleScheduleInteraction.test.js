@@ -30,10 +30,12 @@ function applySchedule({
 
   let lastTimeEvent = scheduleState.lastTimeEvent
 
-  // Reset on new day, force, or animate mode (electron.js:4129-4133)
+  const lerpActive = settings.adjustmentTimeAnimate !== false && settings.adjustmentTimeSpeed === "linear"
+
+  // Reset on new day, force, or linear mode (electron.js:4129-4133)
   if (
     force ||
-    settings.adjustmentTimeAnimate ||
+    lerpActive ||
     (lastTimeEvent && lastTimeEvent.day !== today)
   ) {
     lastTimeEvent = false
@@ -45,10 +47,18 @@ function applySchedule({
 
   // Only apply when the event changed (electron.js:4140)
   if (lastTimeEvent === false || lastTimeEvent.value !== foundEvent.value) {
-    if (settings.adjustmentTimeAnimate) {
+    if (lerpActive) {
       const lerp = schedule.getCurrentAdjustmentEventLERP()
-      if (typeof lerp === 'number') foundEvent.brightness = lerp
-      else if (typeof lerp === 'object') foundEvent.monitors = lerp
+      if (lerp) {
+        foundEvent.brightness = lerp.brightness
+        if (lerp.monitors) foundEvent.monitors = lerp.monitors
+        if (lerp.kelvin !== undefined) foundEvent.kelvin = lerp.kelvin
+        if (lerp.highlightWeight !== undefined) foundEvent.highlightWeight = lerp.highlightWeight
+        if (lerp.softwareDim !== undefined) foundEvent.softwareDim = lerp.softwareDim
+        if (lerp.monitorsSoftwareDim) foundEvent.monitorsSoftwareDim = lerp.monitorsSoftwareDim
+        if (lerp.monitorsKelvin) foundEvent.monitorsKelvin = lerp.monitorsKelvin
+        if (lerp.monitorsHighlightWeight) foundEvent.monitorsHighlightWeight = lerp.monitorsHighlightWeight
+      }
     }
     scheduleState.lastTimeEvent = Object.assign({}, foundEvent, { day: today })
     return foundEvent
@@ -333,11 +343,11 @@ test('wake after overnight idle picks up the event that should be active', () =>
 })
 
 // ---------------------------------------------------------------------------
-// Tests: animate / LERP mode
+// Tests: linear / LERP mode
 // ---------------------------------------------------------------------------
 
-test('adjustmentTimeAnimate=true always resets lastTimeEvent so LERP can advance', () => {
-  const settings = makeSettings({ adjustmentTimeAnimate: true })
+test('speed=linear always resets lastTimeEvent so LERP can advance', () => {
+  const settings = makeSettings({ adjustmentTimeAnimate: true, adjustmentTimeSpeed: "linear" })
   const scheduleState = makeScheduleState()
   const idleState = makeIdleState()
 
@@ -351,7 +361,7 @@ test('adjustmentTimeAnimate=true always resets lastTimeEvent so LERP can advance
   })
   assert.ok(r1, 'first apply')
 
-  // Second tick at 08:01 — animate mode resets lastTimeEvent, re-applies.
+  // Second tick at 08:01 — linear mode resets lastTimeEvent, re-applies.
   const r2 = applySchedule({
     schedule: makeSchedule(settings.adjustmentTimes, at(8, 1)),
     scheduleState,
@@ -359,11 +369,11 @@ test('adjustmentTimeAnimate=true always resets lastTimeEvent so LERP can advance
     settings,
     today: 1,
   })
-  assert.ok(r2, 'animate mode must re-apply even for the same event')
+  assert.ok(r2, 'linear mode must re-apply even for the same event')
 })
 
 test('LERP overrides foundEvent.brightness with interpolated value', () => {
-  const settings = makeSettings({ adjustmentTimeAnimate: true })
+  const settings = makeSettings({ adjustmentTimeAnimate: true, adjustmentTimeSpeed: "linear" })
   const scheduleState = makeScheduleState()
   const idleState = makeIdleState()
 
@@ -381,7 +391,7 @@ test('LERP overrides foundEvent.brightness with interpolated value', () => {
 })
 
 test('LERP blocked during idle, resumes correct value on wake', () => {
-  const settings = makeSettings({ adjustmentTimeAnimate: true })
+  const settings = makeSettings({ adjustmentTimeAnimate: true, adjustmentTimeSpeed: "linear" })
   const scheduleState = makeScheduleState()
   const idleState = makeIdleState()
 
@@ -499,7 +509,7 @@ test('lastTimeEvent from yesterday triggers a reset on the next day', () => {
 test('LERP at exactly the event boundary returns that event brightness', () => {
   // At exactly 07:00 the 07:00 event is current and next is 12:00.
   // percent = 0 → lerp(60, 100, 0) = 60.
-  const settings = makeSettings({ adjustmentTimeAnimate: true })
+  const settings = makeSettings({ adjustmentTimeAnimate: true, adjustmentTimeSpeed: "linear" })
   const result = applySchedule({
     schedule: makeSchedule(settings.adjustmentTimes, at(7)),
     scheduleState: makeScheduleState(),
@@ -514,7 +524,7 @@ test('LERP across midnight boundary after long idle produces correct value', () 
   // User went idle at 21:00, wakes at 02:00 next day.
   // 22:00 (20) → 07:00 (60) span = 540 min. At 02:00 = 240 min in.
   // percent = 240/540 ≈ 0.444 → round(20 + 40*0.444) = 38.
-  const settings = makeSettings({ adjustmentTimeAnimate: true })
+  const settings = makeSettings({ adjustmentTimeAnimate: true, adjustmentTimeSpeed: "linear" })
   const result = applySchedule({
     schedule: makeSchedule(settings.adjustmentTimes, at(2)),
     scheduleState: makeScheduleState(),
@@ -532,6 +542,7 @@ test('single-event schedule never returns a LERP value (avoids divide-by-zero)',
   const settings = makeSettings({
     adjustmentTimes: singleEventTimes,
     adjustmentTimeAnimate: true,
+    adjustmentTimeSpeed: "linear",
   })
 
   const result = applySchedule({

@@ -84,10 +84,11 @@ function createSoftwareDim(deps) {
       win.loadURL('data:text/html,<body style="background:#000;margin:0"></body>')
       softwareDimOverlays[monitorId] = win
     } else {
-      softwareDimOverlays[monitorId].setBounds(bounds)
-      softwareDimOverlays[monitorId].setOpacity(level / 100)
-      if (!softwareDimOverlays[monitorId].isVisible()) {
-        softwareDimOverlays[monitorId].showInactive()
+      const win = softwareDimOverlays[monitorId]
+      win.setBounds(bounds)
+      win.setOpacity(level / 100)
+      if (!win.isVisible()) {
+        win.showInactive()
       }
     }
   }

@@ -69,9 +69,9 @@ test('next event wraps past midnight to the earliest event', () => {
 
 test('LERP interpolates linearly between two daytime events', () => {
   // Halfway between 07:00 (60) and 12:00 (100) -> 80.
-  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(9, 30), false), 80)
+  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(9, 30), false).brightness, 80)
   // Quarter way -> 70.
-  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(8, 15), false), 70)
+  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(8, 15), false).brightness, 70)
 })
 
 // Regression: LERP previously returned false overnight because the current event was
@@ -79,9 +79,9 @@ test('LERP interpolates linearly between two daytime events', () => {
 test('REGRESSION: LERP interpolates across the midnight boundary', () => {
   // 22:00 (20) -> 07:00 next day (60) spans 540 minutes. At 02:00 that's 240 min in.
   // percent = 240/540 ~= 0.444 -> round(20 + 40*0.444) = round(37.78) = 38.
-  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(2), false), 38)
+  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(2), false).brightness, 38)
   // Right at the start of the overnight span -> the night value.
-  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(22), false), 20)
+  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(22), false).brightness, 20)
 })
 
 test('LERP returns per-monitor object when individual displays enabled', () => {
@@ -91,12 +91,39 @@ test('LERP returns per-monitor object when individual displays enabled', () => {
   ]
   // Halfway between 07:00 and 19:00 (at 13:00): A -> 60, B -> 50.
   const result = getCurrentAdjustmentEventLERP(indiv, at(13), true)
-  assert.deepStrictEqual(result, { A: 60, B: 50 })
+  assert.deepStrictEqual(result.monitors, { A: 60, B: 50 })
 })
 
 test('LERP returns false with fewer than two events', () => {
   assert.strictEqual(getCurrentAdjustmentEventLERP([ev("07:00", 60)], at(8), false), false)
   assert.strictEqual(getCurrentAdjustmentEventLERP([], at(8), false), false)
+})
+
+test('LERP treats brightness/softwareDim as one axis across a zero-crossing (Bug 6)', () => {
+  // 20:00 = hardware 100 (no dim); 00:00 = hardware 0 + dim 70 (i.e. -70 on the combined
+  // slider). The combined axis runs 100 -> -70 over the interval and must never apply
+  // hardware brightness and overlay dim at the same time.
+  const crossZero = [
+    { time: "20:00", brightness: 100, softwareDim: 0, monitors: {} },
+    { time: "00:00", brightness: 0, softwareDim: 70, monitors: {} }
+  ]
+
+  // Halfway (22:00): combined = lerp(100, -70, 0.5) = 15 -> still positive, dim off.
+  const mid = getCurrentAdjustmentEventLERP(crossZero, at(22), false)
+  assert.strictEqual(mid.brightness, 15)
+  assert.strictEqual(mid.softwareDim, 0)
+
+  // 90% through (23:36): combined = 100 - 170*0.9 = -53 -> hardware 0, overlay dim 53.
+  const late = getCurrentAdjustmentEventLERP(crossZero, at(23, 36), false)
+  assert.strictEqual(late.brightness, 0)
+  assert.strictEqual(late.softwareDim, 53)
+
+  // Invariant: the two halves of the axis are never both non-zero.
+  for (const nowV of [at(20, 30), at(21), at(22), at(23), at(23, 50)]) {
+    const r = getCurrentAdjustmentEventLERP(crossZero, nowV, false)
+    assert.ok(!(r.brightness > 0 && r.softwareDim > 0),
+      `both non-zero at ${nowV}: bri=${r.brightness} dim=${r.softwareDim}`)
+  }
 })
 
 test('events listed out-of-order still find the correct current event', () => {
@@ -130,15 +157,15 @@ test('LERP skips per-monitor values that are inactive (-1)', () => {
   ]
   // At 14:00 (halfway): A lerps 40→80 = 60; B stays -1 because current.B is not > -1.
   const result = getCurrentAdjustmentEventLERP(indiv, at(14), true)
-  assert.strictEqual(result.A, 60)
-  assert.strictEqual(result.B, -1)
+  assert.strictEqual(result.monitors.A, 60)
+  assert.strictEqual(result.monitors.B, -1)
 })
 
 test('LERP at exactly the current event boundary returns that event value', () => {
   // At exactly 07:00: percent = 0, result = current.brightness = 60.
-  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(7), false), 60)
+  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(7), false).brightness, 60)
   // At exactly 12:00: percent = 0, result = current.brightness = 100.
-  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(12), false), 100)
+  assert.strictEqual(getCurrentAdjustmentEventLERP(schedule, at(12), false).brightness, 100)
 })
 
 test('sun-relative events resolve via the injected getSunCalcTime', () => {

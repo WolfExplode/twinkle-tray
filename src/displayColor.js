@@ -117,8 +117,19 @@ function createDisplayColor(deps) {
   }
 
   function applyCurrentDisplayColorEffects(overrideManual = true) {
-    const foundEvent = schedule.getCurrentAdjustmentEvent()
+    let foundEvent = schedule.getCurrentAdjustmentEvent()
     if (!foundEvent) return
+
+    if (settings.adjustmentTimeAnimate !== false && settings.adjustmentTimeSpeed === "linear") {
+      const lerp = schedule.getCurrentAdjustmentEventLERP()
+      if (lerp) {
+        foundEvent = Object.assign({}, foundEvent)
+        if (lerp.kelvin !== undefined) foundEvent.kelvin = lerp.kelvin
+        if (lerp.highlightWeight !== undefined) foundEvent.highlightWeight = lerp.highlightWeight
+        if (lerp.monitorsKelvin) foundEvent.monitorsKelvin = lerp.monitorsKelvin
+        if (lerp.monitorsHighlightWeight) foundEvent.monitorsHighlightWeight = lerp.monitorsHighlightWeight
+      }
+    }
 
     if (logger) logger.debug(`[color] applyCurrentDisplayColorEffects overrideManual=${overrideManual} event.kelvin=${foundEvent.kelvin ?? 'none'} event.highlightWeight=${foundEvent.highlightWeight ?? 'none'}`)
 

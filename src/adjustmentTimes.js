@@ -92,8 +92,9 @@ function getNextAdjustmentEvent(adjustmentTimes = [], nowValue = 0, getSunCalcTi
 }
 
 // Interpolate (LERP) between the current and next event based on progress through
-// the interval. Returns a brightness number, or a per-monitor object when displays
-// are individually controlled, or false when interpolation isn't possible.
+// the interval. Returns an object with brightness, softwareDim, kelvin, highlightWeight
+// (and per-monitor variants when individualDisplays is true), or false when interpolation
+// isn't possible.
 function getCurrentAdjustmentEventLERP(adjustmentTimes = [], nowValue = 0, individualDisplays = false, getSunCalcTime = () => "12:00") {
   try {
     const current = getCurrentAdjustmentEvent(adjustmentTimes, nowValue, getSunCalcTime)
@@ -122,19 +123,74 @@ function getCurrentAdjustmentEventLERP(adjustmentTimes = [], nowValue = 0, indiv
     lerpValues.end = lerpValues.next
     lerpValues.percent = 1 - (lerpValues.progress / lerpValues.end)
 
-    // Generate result depending on if displays are linked
-    if (individualDisplays) {
-      const keys = Object.keys(next.monitors)
-      const monitors = Object.assign({}, current.monitors)
-      keys.forEach(key => {
-        if (monitors[key] > -1) {
-          monitors[key] = Math.round(Utils.lerp(current.monitors[key], next.monitors[key], lerpValues.percent))
-        }
-      })
-      return monitors
-    } else {
-      return Math.round(Utils.lerp(current.brightness, next.brightness, lerpValues.percent))
+    const p = lerpValues.percent
+
+    // Brightness and software dim are two halves of ONE -100..100 axis: positive = hardware
+    // brightness (overlay off), negative = software dim overlay (hardware at 0). They're
+    // mutually exclusive in the UI/apply model. Interpolate the COMBINED value (brightness -
+    // softwareDim) and split it back, so a transition that crosses zero (e.g. brightness 100
+    // -> dim 70) never applies hardware brightness and overlay dim at the same time — which
+    // would dim the screen while the panel still shows a positive value.
+    const lerpCombined = (curBri, curDim, nextBri, nextDim) => {
+      const v = Utils.lerp((curBri ?? 0) - (curDim ?? 0), (nextBri ?? 0) - (nextDim ?? 0), p)
+      return { brightness: Math.round(Math.max(0, v)), softwareDim: Math.round(v < 0 ? -v : 0) }
     }
+
+    const combined = lerpCombined(current.brightness, current.softwareDim, next.brightness, next.softwareDim)
+
+    const result = {
+      brightness: combined.brightness,
+      softwareDim: combined.softwareDim,
+      kelvin: Math.round(Utils.lerp(current.kelvin ?? 6500, next.kelvin ?? 6500, p)),
+      highlightWeight: Math.round(Utils.lerp(current.highlightWeight ?? 0, next.highlightWeight ?? 0, p)),
+    }
+
+    if (individualDisplays) {
+      // Combine each monitor's brightness/dim on the same single axis as the flat value.
+      // Monitors whose current brightness override is unset (< 0, the -1 sentinel) are left
+      // untouched so they fall back to the (already-combined) flat value downstream.
+      const monitors = Object.assign({}, current.monitors)
+      const monitorsSoftwareDimCombined = {}
+      const combineKeys = new Set([
+        ...Object.keys(current.monitors ?? {}),
+        ...Object.keys(next.monitors ?? {}),
+        ...Object.keys(current.monitorsSoftwareDim ?? {}),
+        ...Object.keys(next.monitorsSoftwareDim ?? {}),
+      ])
+      combineKeys.forEach(key => {
+        const curBri = (current.monitors ?? {})[key]
+        if (!(curBri > -1)) return // unset -> keep sentinel / absent, falls back to flat
+        const nextBriRaw = (next.monitors ?? {})[key]
+        const nextBri = (nextBriRaw > -1) ? nextBriRaw : curBri
+        const curDim = (current.monitorsSoftwareDim ?? {})[key] ?? current.softwareDim ?? 0
+        const nextDim = (next.monitorsSoftwareDim ?? {})[key] ?? next.softwareDim ?? 0
+        const c = lerpCombined(curBri, curDim, nextBri, nextDim)
+        monitors[key] = c.brightness
+        monitorsSoftwareDimCombined[key] = c.softwareDim
+      })
+      result.monitors = monitors
+      if (Object.keys(monitorsSoftwareDimCombined).length) result.monitorsSoftwareDim = monitorsSoftwareDimCombined
+
+      const lerpPerMonitor = (currentMap, nextMap, fallbackCurrent, fallbackNext) => {
+        const keys = new Set([...Object.keys(currentMap ?? {}), ...Object.keys(nextMap ?? {})])
+        if (!keys.size) return undefined
+        const out = {}
+        keys.forEach(key => {
+          const c = (currentMap ?? {})[key] ?? fallbackCurrent
+          const n = (nextMap ?? {})[key] ?? fallbackNext
+          out[key] = Math.round(Utils.lerp(c, n, p))
+        })
+        return out
+      }
+
+      const monitorsKelvin = lerpPerMonitor(current.monitorsKelvin, next.monitorsKelvin, current.kelvin ?? 6500, next.kelvin ?? 6500)
+      if (monitorsKelvin) result.monitorsKelvin = monitorsKelvin
+
+      const monitorsHighlightWeight = lerpPerMonitor(current.monitorsHighlightWeight, next.monitorsHighlightWeight, current.highlightWeight ?? 0, next.highlightWeight ?? 0)
+      if (monitorsHighlightWeight) result.monitorsHighlightWeight = monitorsHighlightWeight
+    }
+
+    return result
   } catch (e) {
     console.log("Error generating Adjustment Time LERP", e)
     return false

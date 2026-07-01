@@ -37,17 +37,16 @@ export default function TimePage({ self }) {
                     </SettingsChild>
                 </SettingsOption>
                 <SettingsOption title={T.t("SETTINGS_TIME_ANIMATE_TITLE")} description={T.t("SETTINGS_TIME_ANIMATE_DESC")} input={self.renderToggle("adjustmentTimeAnimate")} />
-                <SettingsOption title={T.t("SETTINGS_TIME_TRANSITON_TITLE")} description={T.t("SETTINGS_TIME_TRANSITON_DESC")} input={
+                {window.settings.adjustmentTimeAnimate && <SettingsOption title={T.t("SETTINGS_TIME_TRANSITON_TITLE")} description={T.t("SETTINGS_TIME_TRANSITON_DESC")} input={
                     <select value={window.settings.adjustmentTimeSpeed} onChange={(e) => self.setSetting("adjustmentTimeSpeed", e.target.value)}>
                         <option value="slowest">{T.t("GENERIC_SPEED_VERY_SLOW")}</option>
                         <option value="slow">{T.t("GENERIC_SPEED_SLOW")}</option>
                         <option value="normal">{T.t("GENERIC_SPEED_NORMAL")}</option>
                         <option value="faster">{T.t("GENERIC_SPEED_FAST")}</option>
                         <option value="fastest">{T.t("GENERIC_SPEED_VERY_FAST")}</option>
-                        <option value="instant">{T.t("GENERIC_SPEED_INSTANT")}</option>
                         <option value="linear">{T.t("GENERIC_SPEED_LINEAR")}</option>
                     </select>
-                } />
+                } />}
                 <SettingsOption title={T.t("SETTINGS_TIME_STARTUP_TITLE")} description={T.t("SETTINGS_TIME_STARTUP_DESC")} input={self.renderToggle("checkTimeAtStartup")} />
                 <SettingsOption title="Schedule refresh interval" description="How often (in seconds) the schedule is re-checked and applied. Lower = more responsive transitions; higher = less background work." input={
                     <input type="number" min="10" max="3600" step="10" value={window.settings.backgroundUpdateInterval ?? 60} onChange={(e) => self.setSetting("backgroundUpdateInterval", Math.max(10, Math.min(3600, e.target.value * 1)))} style={{ width: "70px" }} />
@@ -132,8 +131,8 @@ export default function TimePage({ self }) {
                         />
                     } />
                 </SettingsOption>
-                <SettingsOption title="Animate brightness changes" description="When off, brightness changes instantly instead of fading. Disable if your monitor flickers during DDC updates." input={self.renderToggle("brightnessAnimationEnabled")} />
-                {window.settings.brightnessAnimationEnabled !== false && <SettingsOption title="Dim transition speed" description="How fast the dim animation runs (brightness units per second). Higher = faster.">
+                <SettingsOption title="Animate changes" description="When off, brightness and color changes happen instantly instead of fading. Disable if your monitor flickers during DDC updates." input={self.renderToggle("brightnessAnimationEnabled")} />
+                {window.settings.brightnessAnimationEnabled !== false && <SettingsOption title="Dim transition speed" description="How fast the inactive dim animation runs (brightness units per second). Higher = faster.">
                     <SettingsChild content={
                         <div>
                             <label style={{ "textTransform": "capitalize" }}>units/s</label>

@@ -2044,10 +2044,16 @@ function transitionBrightness(level, eventMonitors = [], stepSpeed = 1, software
     let highlight = highlightWeight
     if (usePerMonitor && eventMonitorsKelvin[monitor.id] != null) kelvin = eventMonitorsKelvin[monitor.id]
     if (usePerMonitor && eventMonitorsHighlightWeight[monitor.id] != null) highlight = eventMonitorsHighlightWeight[monitor.id]
-    const colorUpdates = {}
-    if (settings.adjustmentTimeTemperatureEnabled) colorUpdates.kelvin = kelvin
-    if (settings.adjustmentTimeHighlightCompressionEnabled) colorUpdates.highlightWeight = highlight
-    if (Object.keys(colorUpdates).length) updateDisplayColor(monitor.id, colorUpdates, 'schedule-animate')
+    if (settings.adjustmentTimeTemperatureEnabled) {
+      const kelvinRange = Math.abs(kelvin - brightnessController.getCanonical(monitor.id).warmth) / 55
+      const kelvinDuration = (settings.brightnessAnimationEnabled !== false && step > 0) ? (kelvinRange / step) * baseIntervalMs : 0
+      brightnessController.animateTo(monitor.id, 'canonical.warmth', kelvin, kelvinDuration)
+    }
+    if (settings.adjustmentTimeHighlightCompressionEnabled) {
+      const hwRange = Math.abs(highlight - brightnessController.getCanonical(monitor.id).highlightCompression)
+      const hwDuration = (settings.brightnessAnimationEnabled !== false && step > 0) ? (hwRange / step) * baseIntervalMs : 0
+      brightnessController.animateTo(monitor.id, 'canonical.highlightCompression', highlight, hwDuration)
+    }
   }
 }
 
@@ -4183,8 +4189,11 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
     // the store so it stays the source of truth.
     let lastTimeEvent = store.get("schedule").lastTimeEvent
 
-    // Reset on new day
-    if (force || settings.adjustmentTimeAnimate || settings.adjustmentTimeSpeed === "linear" || (lastTimeEvent && lastTimeEvent.day != date.getDate())) {
+    // LERP (continuous interpolation) is active only when the animate toggle is on AND speed=linear.
+    const lerpActive = settings.adjustmentTimeAnimate !== false && settings.adjustmentTimeSpeed === "linear"
+
+    // Reset on new day (or LERP mode, which re-evaluates the interpolated value every tick)
+    if (force || lerpActive || (lastTimeEvent && lastTimeEvent.day != date.getDate())) {
       logger.debug("New day (or forced)... resetting lastTimeEvent")
       lastTimeEvent = false
       store.update("schedule", { lastTimeEvent: false })
@@ -4198,13 +4207,18 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
       // midnight from a 22:00 event to a 07:00 event) still apply.
       if (lastTimeEvent == false || lastTimeEvent.value !== foundEvent.value) {
 
-        if (settings.adjustmentTimeAnimate || settings.adjustmentTimeSpeed === "linear") {
-          // If LERPing, override foundEvent with interpolated value
+        if (lerpActive) {
+          // If LERPing, override foundEvent with interpolated values for all settings
           const lerp = schedule.getCurrentAdjustmentEventLERP()
-          if (typeof lerp === "number") {
-            foundEvent.brightness = lerp
-          } else if (typeof lerp === "object") {
-            foundEvent.monitors = lerp
+          if (lerp) {
+            foundEvent.brightness = lerp.brightness
+            if (lerp.monitors) foundEvent.monitors = lerp.monitors
+            if (lerp.kelvin !== undefined) foundEvent.kelvin = lerp.kelvin
+            if (lerp.highlightWeight !== undefined) foundEvent.highlightWeight = lerp.highlightWeight
+            if (lerp.softwareDim !== undefined) foundEvent.softwareDim = lerp.softwareDim
+            if (lerp.monitorsSoftwareDim) foundEvent.monitorsSoftwareDim = lerp.monitorsSoftwareDim
+            if (lerp.monitorsKelvin) foundEvent.monitorsKelvin = lerp.monitorsKelvin
+            if (lerp.monitorsHighlightWeight) foundEvent.monitorsHighlightWeight = lerp.monitorsHighlightWeight
           }
         }
 
@@ -4225,7 +4239,7 @@ function applyCurrentAdjustmentEvent(force = false, instant = true) {
           // Controller owns canonical — schedule writes directly to canonical for all
           // monitors (including inactive-dimmed ones). The inactiveOffset keeps commanded
           // brightness at the dim level; restore just calls clearDimOffset.
-          if (instant || settings.adjustmentTimeSpeed === "instant" || settings.adjustmentTimeSpeed === "linear") {
+          if (instant || settings.adjustmentTimeAnimate === false || settings.adjustmentTimeSpeed === "instant" || lerpActive) {
             transitionlessBrightness(foundEvent.brightness, eventMonitors, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight)
           } else {
             transitionBrightness(foundEvent.brightness, eventMonitors, 1, eventSoftwareDim, eventMonitorsSoftwareDim, eventKelvin, eventMonitorsKelvin, eventHighlightWeight, eventMonitorsHighlightWeight)
