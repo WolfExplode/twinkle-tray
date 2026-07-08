@@ -1189,8 +1189,11 @@ async function checkVCP(monitor, code, skipCacheWrite = false) {
     const vcpString = Utils.vcpStr(code)
     if(!code || code == "0x0") return false;
     try {
-        let result = ddcci._getVCP(monitor, parseInt(vcpString))
-        if (code === 96) return ddcci.getMonitorInputs(monitor)
+        // Code 96 (0x60, input select) is read via getMonitorInputs() — it returns
+        // the input list, not a single VCP value — so the raw _getVCP read is
+        // skipped rather than fetched and discarded. Falls through to the same
+        // cache write / inter-command wait as every other code below.
+        let result = (code === 96) ? ddcci.getMonitorInputs(monitor) : ddcci._getVCP(monitor, parseInt(vcpString))
         if (!skipCacheWrite) {
             if (!vcpCache[monitor]) vcpCache[monitor] = {};
             vcpCache[monitor]["vcp_" + vcpString] = result
