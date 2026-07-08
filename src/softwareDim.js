@@ -41,15 +41,18 @@ function createSoftwareDim(deps) {
       }
     }
 
-    if (store.get("idle").isWindowsUserIdle) {
-      logger?.debug(`[softwareDim][diag] updateSoftwareDim(${monitorId}, ${level}) — skipped: isWindowsUserIdle`)
-      return
-    }
-
+    // Hide-at-zero runs even while Windows is idle: showSoftwareDimOverlays on
+    // wake only re-shows levels > 0, so a skipped hide would leave a stuck
+    // black overlay.
     if (level === 0) {
       if (softwareDimOverlays[monitorId] && !softwareDimOverlays[monitorId].isDestroyed()) {
         softwareDimOverlays[monitorId].hide()
       }
+      return
+    }
+
+    if (store.get("idle").isWindowsUserIdle) {
+      logger?.debug(`[softwareDim][diag] updateSoftwareDim(${monitorId}, ${level}) — skipped: isWindowsUserIdle`)
       return
     }
 

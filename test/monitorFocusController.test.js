@@ -138,6 +138,65 @@ test('mousemove restores inactive-dimmed monitor even while idle flags are set',
   }
 })
 
+test('desync: manual brightness change without notifyInteraction leaves monitor stuck in dimmed set — never re-dims', () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  try {
+    const { deps, monitors, brightnessController } = makeDeps()
+    const ctrl = createMonitorFocusController(deps)
+    ctrl.start()
+    mock.timers.tick(2000)
+    assert.strictEqual(ctrl.isDimmed('M2'), true)
+
+    // electron.js manual path (hotkey/cli/api): controller clears the inactive
+    // offset and brightness returns to 100 — but if monitorFocus is not told,
+    // its dimmed set still contains M2.
+    monitors.m2.brightness = 100
+    brightnessController.animCalls.length = 0
+
+    // Monitor stays inactive well past the timeout — but checkMonitorFocus
+    // skips anything already in the dimmed set, so it never re-dims.
+    mock.timers.tick(10000)
+    assert.strictEqual(ctrl.isDimmed('M2'), true, 'still marked dimmed (desynced)')
+    assert.strictEqual(
+      brightnessController.animCalls.filter(c => c.monitorId === 'M2').length,
+      0,
+      'no re-dim ever issued while desynced'
+    )
+
+    ctrl.stop()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('notifyInteraction resyncs: clears dim state and monitor re-dims after a fresh timeout', () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  try {
+    const { deps, monitors, brightnessController } = makeDeps()
+    const ctrl = createMonitorFocusController(deps)
+    ctrl.start()
+    mock.timers.tick(2000)
+    assert.strictEqual(ctrl.isDimmed('M2'), true)
+
+    // Same manual change, but electron.js notifies the focus controller.
+    monitors.m2.brightness = 100
+    ctrl.notifyInteraction('M2', 'hotkey')
+    assert.strictEqual(ctrl.isDimmed('M2'), false, 'dim state cleared on interaction')
+
+    brightnessController.animCalls.length = 0
+    mock.timers.tick(2000) // past the 1s timeout, next poll tick
+    assert.strictEqual(ctrl.isDimmed('M2'), true, 're-dims after fresh timeout')
+    assert.ok(
+      brightnessController.animCalls.some(c => c.monitorId === 'M2' && c.property === 'inactiveOffset'),
+      'new dim animation issued'
+    )
+
+    ctrl.stop()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 test('reset clears all dim state via controller', () => {
   mock.timers.enable({ apis: ['setInterval', 'Date'] })
   try {

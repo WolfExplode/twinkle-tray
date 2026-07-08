@@ -10,6 +10,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const [state, setState] = useState({
     monitors: [],
     linkedLevelsActive: false,
+    monitorFocusActive: false,
     manualTemperatureActive: false,
     manualHighlightActive: false,
     adjustmentTimesActive: true,
@@ -55,6 +56,14 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     setState(prev => ({ ...prev, linkedLevelsActive }))
     window.sendSettings({
       linkedLevelsActive
+    })
+  }
+
+  const toggleMonitorFocus = () => {
+    const monitorFocusActive = (state.monitorFocusActive ? false : true)
+    setState(prev => ({ ...prev, monitorFocusActive }))
+    window.sendSettings({
+      monitorFocusEnabled: monitorFocusActive
     })
   }
 
@@ -277,6 +286,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
   const recievedSettings = (e) => {
     const settings = e.detail
     const linkedLevelsActive = (settings.linkedLevelsActive ?? false)
+    const monitorFocusActive = (settings.monitorFocusEnabled ?? false)
     const adjustmentTimesActive = (settings.adjustmentTimesActive !== false)
     const hasTimeAdjustments = (settings.adjustmentTimes?.length > 0)
     const sleepAction = (settings.sleepAction ?? "none")
@@ -287,6 +297,7 @@ const BrightnessPanel = memo(function BrightnessPanel() {
     setState(prev => ({
       ...prev,
       linkedLevelsActive,
+      monitorFocusActive,
       adjustmentTimesActive,
       hasTimeAdjustments,
       remaps,
@@ -674,6 +685,16 @@ const BrightnessPanel = memo(function BrightnessPanel() {
               onClick={toggleTimeAdjustments}
               className="schedule">
               &#xE823;
+            </div>
+          }
+          {
+            numMonitors > 1 &&
+            <div
+              title={T.t("PANEL_BUTTON_MONITOR_FOCUS")}
+              data-active={state.monitorFocusActive}
+              onClick={toggleMonitorFocus}
+              className="monitor-focus">
+              &#xE7B3;
             </div>
           }
           {

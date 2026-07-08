@@ -1925,6 +1925,12 @@ function updateBrightness(index, newLevel, useCap = true, vcpValue = "brightness
       const USER_INITIATED = new Set(['user-panel', 'cli', 'api', 'hotkey', 'tray-scroll', 'profile', 'known-displays', ''])
       const controllerSource = USER_INITIATED.has(source) ? 'manual' : source
       brightnessController.setCanonical(monitor.id, { brightness: newLevel }, controllerSource)
+      // setCanonical('manual') cleared the dim offsets — keep the monitorFocus
+      // dimmed set in sync too, or the monitor is stuck marked-dimmed and never
+      // re-dims until the cursor visits it.
+      if (controllerSource === 'manual' && settings.monitorFocusEnabled) {
+        monitorFocus.notifyInteraction(monitor.id, source || 'manual')
+      }
       return monitor.id
     }
 
@@ -4089,7 +4095,10 @@ function idleCheckShort() {
       Object.values(monitors).forEach((monitor) => {
         brightnessController.clearDimOffset(monitor.id, 'idle')
         if (settings.detectIdleSoftwareDim > 0 && !(settings.monitorFocusEnabled && monitorFocus?.isDimmed(monitor.id))) {
-          updateSoftwareDim(monitor.id, 0)
+          // Restore to canonical, not 0 — a manual/schedule software dim that was
+          // active before idle must survive the wake (same policy as clearDimOffset
+          // and the monitorFocus restore paths).
+          updateSoftwareDim(monitor.id, brightnessController.getCanonical(monitor.id).softwareDim ?? 0)
         }
       })
 

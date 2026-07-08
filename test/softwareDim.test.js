@@ -138,6 +138,39 @@ test('level=0 hides existing overlay, does not create new one', () => {
   assert.ok(!instances[0]._visible, 'overlay hidden on level=0')
 })
 
+test('level=0 during isWindowsUserIdle still hides existing overlay', () => {
+  const { deps, instances, idle } = makeDeps()
+  const { updateSoftwareDim } = createSoftwareDim(deps)
+
+  updateSoftwareDim('MON-B', 30)
+  assert.strictEqual(instances.length, 1)
+  assert.ok(instances[0]._visible)
+
+  // Displays go to sleep, then something clears the dim (e.g. monitorFocus
+  // reset, idle-wake racing the display-wake event). The hide must not be
+  // skipped — showSoftwareDimOverlays on wake only re-shows levels > 0 and
+  // would leave a stuck black overlay.
+  idle.isWindowsUserIdle = true
+  updateSoftwareDim('MON-B', 0)
+
+  assert.ok(!instances[0]._visible, 'overlay hidden even while windows idle')
+})
+
+test('non-zero level during isWindowsUserIdle is recorded and re-shown by showSoftwareDimOverlays after wake', () => {
+  const { deps, instances, idle, softwareDimLevels } = makeDeps()
+  const { updateSoftwareDim, showSoftwareDimOverlays } = createSoftwareDim(deps)
+
+  idle.isWindowsUserIdle = true
+  updateSoftwareDim('MON-B', 40)
+  assert.strictEqual(instances.length, 0, 'no overlay created during idle')
+  assert.strictEqual(softwareDimLevels['MON-B'], 40, 'level recorded during idle')
+
+  idle.isWindowsUserIdle = false
+  showSoftwareDimOverlays()
+  assert.strictEqual(instances.length, 1, 'overlay created on wake')
+  assert.strictEqual(instances[0]._opacity, 0.4)
+})
+
 test('second call updates opacity and bounds on existing overlay', () => {
   const { deps, instances } = makeDeps()
   const { updateSoftwareDim } = createSoftwareDim(deps)

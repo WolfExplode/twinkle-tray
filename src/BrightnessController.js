@@ -72,6 +72,9 @@ function createBrightnessController(deps) {
     if (ghost === 'inactive') {
       monitor.inactiveDimmed = true
       monitor.preDimBrightness = c.brightness
+    } else {
+      delete monitor.inactiveDimmed
+      delete monitor.preDimBrightness
     }
   }
 
@@ -441,7 +444,7 @@ function createBrightnessController(deps) {
       warmth:                values.warmth                ?? 6500,
       highlightCompression:  values.highlightCompression  ?? 0,
     }
-    offsets[monitorId] = { idle: 0, inactive: 0 }
+    offsets[monitorId] = { idle: 0, inactive: 0, inactiveSoftwareDim: 0 }
     lastCommandedBrightness[monitorId] = canonical[monitorId].brightness
   }
 

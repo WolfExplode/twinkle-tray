@@ -353,6 +353,29 @@ test('manual setCanonical clears inactiveSoftwareDim overlay', () => {
   }
 })
 
+test('clearing inactive offset removes stale inactiveDimmed/preDimBrightness from monitor object', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { deps, monitors } = makeDeps()
+    const ctrl = createBrightnessController(deps)
+    ctrl.initFromMonitor('M1', { brightness: 90, softwareDim: 0 })
+
+    ctrl.setDimOffset('M1', 'inactive', 70)
+    assert.strictEqual(monitors.m1.inactiveDimmed, true, 'flag set while inactive-dimmed')
+    assert.strictEqual(monitors.m1.preDimBrightness, 90, 'preDimBrightness recorded')
+
+    // Manual write clears offsets via the controller alone — no monitorFocus
+    // cleanup runs, so syncMonitorObject must clear the renderer flags itself.
+    ctrl.setCanonical('M1', { brightness: 60 }, 'manual')
+
+    assert.strictEqual(monitors.m1.ghostMarkerActive, false, 'ghost marker off')
+    assert.strictEqual(monitors.m1.inactiveDimmed, undefined, 'stale inactiveDimmed cleared')
+    assert.strictEqual(monitors.m1.preDimBrightness, undefined, 'stale preDimBrightness cleared')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 test('clearing dim offsets restores commanded to canonical', () => {
   mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
   try {
