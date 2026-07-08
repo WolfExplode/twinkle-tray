@@ -4,18 +4,24 @@ const fs = require('fs')
 function udpSendCommand(type, data, port = 14715, key) {
     return new Promise((resolve, reject) => {
         const client = require('dgram').createSocket('udp4')
-        const udpTimeout = setTimeout(() => {
+        // Settle exactly once and always clean up: without an 'error' handler a
+        // socket error crashes the process, and a leaked timeout/socket keeps
+        // the CLI second instance alive after success.
+        const finish = (fn, value) => {
             clearTimeout(udpTimeout)
-            reject("No response")
-        }, 1000)
+            try { client.close() } catch (e) { }
+            fn(value)
+        }
+        const udpTimeout = setTimeout(() => finish(reject, "No response"), 1000)
 
+        client.on('error', () => finish(reject, 'Failed to send command'))
         client.on('message', (message, connection) => {
-            resolve(message?.toString())
+            finish(resolve, message?.toString())
         })
 
         client.send(JSON.stringify({ type, data, key }), port, "localhost", err => {
             if (err) {
-                reject('Failed to send command')
+                finish(reject, 'Failed to send command')
             }
         })
     })
@@ -23,21 +29,26 @@ function udpSendCommand(type, data, port = 14715, key) {
 
 function pipeSendCommand(type, data, port = 14715, key) {
     return new Promise((resolve, reject) => {
-        const cmdTimeout = setTimeout(() => {
+        const finish = (fn, value) => {
             clearTimeout(cmdTimeout)
-            reject("No response")
-        }, 1000)
+            try { client.destroy() } catch (e) { }
+            fn(value)
+        }
+        const cmdTimeout = setTimeout(() => finish(reject, "No response"), 1000)
 
         const client = require('net').connect('\\\\.\\pipe\\twinkle-tray\\cmds')
 
+        // Without this, a missing pipe (app not running) raises an unhandled
+        // 'error' event and crashes the CLI instead of rejecting.
+        client.on('error', () => finish(reject, 'Failed to send command'))
         client.on('data', function(message) {
-            resolve(message?.toString())
+            finish(resolve, message?.toString())
         })
 
         try {
             client.write(JSON.stringify({ type, data, key }))
         } catch(e) {
-            reject('Failed to send command:', e)
+            finish(reject, 'Failed to send command')
         }
     })
 }

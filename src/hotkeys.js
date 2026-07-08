@@ -167,8 +167,10 @@ function createHotkeyController(deps) {
 
   function applyHotkeys(monitorList = monitors) {
     try {
+      // Always unregister first — deleting the last hotkey must release its
+      // accelerator too, not leave the old shortcut firing until restart.
+      globalShortcut.unregisterAll()
       if (settings.hotkeys !== undefined && settings.hotkeys?.length) {
-        globalShortcut.unregisterAll()
         for (const hotkey of settings.hotkeys) {
           try {
             // Only apply if found/valid

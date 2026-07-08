@@ -66,7 +66,9 @@ const knownDisplaysPath = path.join(configFilesDir, `\\known-displays${(isDev ? 
 // Handle multiple instances before continuing
 const singleInstanceLock = app.requestSingleInstanceLock(process.argv)
 if (!singleInstanceLock) {
-  try { Utils.handleProcessedArgs(Utils.processArgs(process.argv, app), knownDisplaysPath, settingsPath).then(() => app.exit()) } catch (e) { app.exit() }
+  // .catch too — a rejected command (e.g. pipe/UDP timeout) must still exit
+  // the second instance rather than leave it running headless.
+  try { Utils.handleProcessedArgs(Utils.processArgs(process.argv, app), knownDisplaysPath, settingsPath).then(() => app.exit()).catch(() => app.exit()) } catch (e) { app.exit() }
   return false
 } else {
   logger.debug("Starting Twinkle Tray...")
@@ -282,10 +284,11 @@ function getVCP(monitor, code) {
     }, 3000)
     monitorsThread.once(`getVCP::${hwid}::${vcpParsed}`, data => {
       clearTimeout(timeout)
-      // Write VCP values to monitor object
+      // Write VCP values to monitor object. Features hold [current, max]
+      // arrays everywhere else — store the whole pair, not the bare scalar.
       if(data?.value?.[0] != undefined) {
         try {
-          monitors[hwid?.split("#")[2]].features[Utils.vcpStr(vcpParsed)] = data.value?.[0]
+          monitors[hwid?.split("#")[2]].features[Utils.vcpStr(vcpParsed)] = data.value
         } catch(e) {
           logger.debug(e)
         }
@@ -561,6 +564,7 @@ const defaultSettings = {
   useGuidBrightnessEvent: true,
   recreateTray: false,
   recreateFlyout: false,
+  reloadFlyout: false,
   defaultOverlayType: "safe",
   disableMouseEvents: false,
   disableThrottling: false,
@@ -827,7 +831,7 @@ function processSettings(newSettings = {}, sendUpdate = true) {
     }
 
     if (settings.udpEnabled === true) {
-      if (!udp.server) udp.start(settings.udpPort);
+      if (!udp.server) udp.start(settings.udpPortStart);
     } else if (settings.udpEnabled === false) {
       if (udp.server) udp.stop();
     }
@@ -893,13 +897,17 @@ function processSettings(newSettings = {}, sendUpdate = true) {
       rebuildTray = true
     }
 
-    if (settings.profiles) {
+    // Only rebuild the tray when profiles actually changed — settings.profiles
+    // is always truthy ([]), which used to rebuild the tray on every settings
+    // write. Focus tracking still reconciles on every pass (it's how tracking
+    // starts at boot and after any change).
+    if (newSettings.profiles !== undefined) {
       rebuildTray = true
-      if(settings.profiles?.length > 0) {
-        if(!focusTrackingID) startFocusTracking();
-      } else if(focusTrackingID) {
-        stopFocusTracking()
-      }
+    }
+    if (settings.profiles?.length > 0) {
+      if(!focusTrackingID) startFocusTracking();
+    } else if(focusTrackingID) {
+      stopFocusTracking()
     }
 
     if (newSettings.branch) {
@@ -1211,7 +1219,10 @@ async function hotkeyOverlayShow() {
 
 function hotkeyOverlayHide(force = true) {
   if (!mainWindow) {
-    hotkeyOverlayStart(333)
+    // No window to hide — just drop the pending timeout. Rescheduling here
+    // ping-ponged with hotkeyOverlayStart every 333ms until a panel existed.
+    if (hotkeyOverlayTimeout) clearTimeout(hotkeyOverlayTimeout);
+    hotkeyOverlayTimeout = false
     return false
   }
 
@@ -3937,9 +3948,11 @@ function handleMetricsChange(type) {
     handleChangeTimeout1 = false
   }, parseInt(settings.idleRestoreSeconds || 7) * 1000)
 
+  // Release on the same delay as the deferred work above so the skip-list
+  // block still covers the actual refresh/re-apply.
   setTimeout(() => {
     block.release()
-  }, parseInt(settings.idleRestoreSeconds || 3) * 1000)
+  }, parseInt(settings.idleRestoreSeconds || 7) * 1000)
 }
 
 
@@ -4002,11 +4015,19 @@ function getIdleSettingValue() {
   return detectIdleTime
 }
 
+// The threshold that arms the short idle monitor. The wake check must use the
+// SAME value: waking on getIdleSettingValue() while arming on 180 made the
+// idle/wake cycle churn (forced schedule re-applies every few seconds) whenever
+// idle dimming was disabled and idle time sat between the two thresholds.
+function getIdleThreshold() {
+  return settings.detectIdleTimeEnabled ? getIdleSettingValue() : 180
+}
+
 function idleCheckLong() {
   if (tempSettings.pauseIdleDetection) return false;
   const idleTime = getSystemIdleTime()
   store.update("idle", { lastIdleTime: idleTime })
-  const idleThreshold = settings.detectIdleTimeEnabled ? getIdleSettingValue() : 180
+  const idleThreshold = getIdleThreshold()
   if (idleTime >= idleThreshold && !notIdleMonitor) {
     if (store.get("idle").isUserIdle) {
       logger.debug(`[idle:long] ⚠ double-start: isUserIdle already true, notIdleMonitor=${!!notIdleMonitor} — race in startIdleCheckShort await?`)
@@ -4088,9 +4109,9 @@ function idleCheckShort() {
     }
 
     const lastIdleTime = store.get("idle").lastIdleTime
-    if (store.get("idle").isUserIdle && (idleTime < lastIdleTime || idleTime < getIdleSettingValue())) {
+    if (store.get("idle").isUserIdle && (idleTime < lastIdleTime || idleTime < getIdleThreshold())) {
       // Wake up
-      logger.debug(`[idle:short] wake — idleTime=${idleTime}s lastIdleTime=${lastIdleTime}s threshold=${getIdleSettingValue()}s userIdleDimmed=${store.get("idle").userIdleDimmed}`)
+      logger.debug(`[idle:short] wake — idleTime=${idleTime}s lastIdleTime=${lastIdleTime}s threshold=${getIdleThreshold()}s userIdleDimmed=${store.get("idle").userIdleDimmed}`)
       clearInterval(notIdleMonitor)
       notIdleMonitor = false
 
@@ -4764,7 +4785,9 @@ const handleClientMessage = async (message, remote) => {
 
 const udp = {
   server: false,
-  start: function (port = 14715) {
+  // dgram bind failures arrive as 'error' events (not throws), so fallback
+  // ports are retried from the error handler with a fresh socket.
+  start: function (port = 14715, fallbackPorts = [port + 13137, port + 1603]) {
     if (udp.server) return false;
 
     logger.debug("[UDP] Starting local UDP Server...")
@@ -4772,9 +4795,14 @@ const udp = {
     const server = dgram.createSocket('udp4')
     udp.server = server
 
+    let isListening = false
     server.on('error', error => {
       logger.debug(`[UDP] UDP server error:\n${error.stack}`)
-      server.close()
+      try { server.close() } catch (e) { }
+      udp.server = false
+      if (!isListening && fallbackPorts.length) {
+        udp.start(fallbackPorts.shift(), fallbackPorts)
+      }
     });
 
     server.on('message', async (message, remote) => {
@@ -4788,28 +4816,14 @@ const udp = {
     });
 
     server.on('listening', () => {
+      isListening = true
       const connection = server.address();
       writeSettings({ udpPortActive: connection.port })
       logger.debug(`[UDP] UDP server listening at ${connection.address}:${connection.port}`);
     });
 
-    // Bind to default port, or another if it fails
     const address = (!settings.udpRemote ? 'localhost' : undefined)
-    try {
-      server.bind({ address, port })
-    } catch (e) {
-      try {
-        // Let's try another
-        server.bind({ address, port: (port + 13137) })
-      } catch (e2) {
-        try {
-          // Okay, one more?
-          server.bind({ address, port: (port + 1603) })
-        } catch (e3) {
-          logger.debug(e3)
-        }
-      }
-    }
+    server.bind({ address, port })
 
   },
   stop: function () {

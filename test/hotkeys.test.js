@@ -172,3 +172,29 @@ test('applyHotkeys registers each accelerator, skipping entries without one', ()
   ctrl.applyHotkeys()
   assert.deepStrictEqual(registered, ['Ctrl+1', 'Ctrl+2'])
 })
+
+test('applyHotkeys unregisters stale accelerators when the hotkey list becomes empty', () => {
+  let unregisterAllCalls = 0
+  const registered = []
+  const settings = { hotkeys: [{ id: 'h1', accelerator: 'Ctrl+1' }] }
+  const ctrl = createHotkeyController({
+    monitors: {}, settings, store: { get: () => ({}) }, logger: { debug() {} },
+    globalShortcut: {
+      unregisterAll: () => { unregisterAllCalls++ },
+      register: (acc) => { registered.push(acc); return true }
+    },
+    getLastRefreshMonitors: () => Date.now(), refreshMonitors: async () => {}, getVCP: async () => 0,
+    minMax: v => v, touchMonitors() {}, updateBrightnessThrottle() {},
+    writeSettings() {}, sleepDisplays() {}, setRecentlyInteracted() {}, hotkeyOverlayStart() {}, sendToAllWindows() {}
+  })
+
+  ctrl.applyHotkeys()
+  assert.deepStrictEqual(registered, ['Ctrl+1'])
+  assert.strictEqual(unregisterAllCalls, 1, 'unregisterAll called while registering the accelerator')
+
+  // User deletes the last hotkey — the list is now empty. The old accelerator
+  // must still be released, or it keeps firing until the app restarts.
+  settings.hotkeys = []
+  ctrl.applyHotkeys()
+  assert.strictEqual(unregisterAllCalls, 2, 'unregisterAll must still run when the hotkey list is empty')
+})

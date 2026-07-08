@@ -376,6 +376,38 @@ test('clearing inactive offset removes stale inactiveDimmed/preDimBrightness fro
   }
 })
 
+test('setCanonicalGroup cancels in-flight animations — linked-slider write is not clobbered on the next tick', () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
+  try {
+    const { deps, monitors, ddcCalls } = makeDeps()
+    // Second monitor for the linked-levels group write.
+    monitors.m2 = { id: 'M2', key: 'm2', type: 'ddcci', brightness: 50 }
+    const ctrl = createBrightnessController(deps)
+    ctrl.initFromMonitor('M1', { brightness: 50, softwareDim: 0 })
+    ctrl.initFromMonitor('M2', { brightness: 50, softwareDim: 0 })
+
+    // Schedule animates M1 from 50 -> 100 over 1000ms
+    ctrl.animateTo('M1', 'canonical.brightness', 100, 1000)
+    mock.timers.tick(200) // mid-flight — canonical ~60
+    ddcCalls.length = 0
+
+    // User drags the linked slider to 75 for both monitors
+    ctrl.setCanonicalGroup(['M1', 'M2'], { brightness: 75 }, 'manual')
+
+    assert.strictEqual(ctrl.getCanonical('M1').brightness, 75, 'M1 canonical set to manual value')
+    assert.strictEqual(ctrl.getCanonical('M2').brightness, 75, 'M2 canonical set to manual value')
+    assert.ok(ddcCalls.some(c => c.brightness === 75), 'DDC dispatched at 75')
+
+    // Advance well past the original animation's end (1000ms total) — without
+    // cancelling the track, this tick would recompute progress=1 and snap
+    // canonical.brightness back to the old target (100), clobbering the manual write.
+    mock.timers.tick(1000)
+    assert.strictEqual(ctrl.getCanonical('M1').brightness, 75, 'stale animation did not resurrect and overwrite manual value')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 test('clearing dim offsets restores commanded to canonical', () => {
   mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] })
   try {

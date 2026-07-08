@@ -615,7 +615,9 @@ async function getStudioDisplay(monitors) {
             const monitorKey = existingKey || hwid[2]
             const existingMonitor = monitors[monitorKey] || {}
             const monitorHwid = existingMonitor.hwid?.length ? existingMonitor.hwid : hwid
-            const modelName = display.getModelName()
+            // Fallback USB devices don't implement getModelName — guard so one
+            // missing method doesn't abort the whole Studio Display pass.
+            const modelName = (typeof display.getModelName === "function" ? display.getModelName() : undefined)
             usedKeys.push(monitorKey)
             updateDisplay(monitors, monitorKey, {
                 name: existingMonitor.name || modelName || "Apple Studio Display",
@@ -1013,9 +1015,11 @@ function getBrightnessDDC(monitorObj) {
                 if (monitor.brightnessRaw !== undefined && monitor.brightnessMax !== undefined) {
                     console.log("\x1b[41mUSING PREVIOUS VALUES\x1b[0m")
                     brightnessValues = [monitor.brightnessRaw, monitor.brightnessMax]
-                } else if (vcpCache[monitor] && vcpCache[monitor]["vcp_" + 0x10]) {
+                } else if (vcpCache[ddcciPath]?.["vcp_" + Utils.vcpStr(monitor.brightnessType)]) {
+                    // Cache is keyed by the ddcci path string with "vcp_0x.." keys
+                    // (see checkVCP) — not by the monitor object / decimal code.
                     console.log("\x1b[41mUSING VCP CACHE\x1b[0m")
-                    brightnessValues = vcpCache[monitor]["vcp_" + 0x10];
+                    brightnessValues = vcpCache[ddcciPath]["vcp_" + Utils.vcpStr(monitor.brightnessType)];
                 } else {
                     console.log("CATASTROPHIC FAILURE", monitor)
                     // Catastrophic failure. Revert to defaults.
@@ -1410,6 +1414,8 @@ const getBrightnessWMIC = async () => {
 
                     for (let monitor of result) {
 
+                        if (!monitor.InstanceName) continue;
+
                         let hwid = Utils.readInstanceName(monitor.InstanceName)
                         hwid[2] = hwid[2].split("_")[0]
 
@@ -1507,6 +1513,7 @@ async function testDDCCIMethods() {
                     failReason = "Didn't find ID: " + id
                 }
                 if(JSON.stringify(fastFeatures[id]) != JSON.stringify(accurateFeatures[id])) {
+                    fastIsFine = false
                     failReason = "Features don't match: " + id
                 }
             }

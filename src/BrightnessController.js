@@ -351,6 +351,18 @@ function createBrightnessController(deps) {
   // dispatched per-monitor via depth-1 queue.
   function setCanonicalGroup(monitorIds, newSettings, source) {
     for (const monitorId of monitorIds) {
+      // Cancel in-flight animations for any property being explicitly set —
+      // same policy as setCanonical, or a running track overwrites this value
+      // on the next tick.
+      for (const prop of Object.keys(newSettings)) {
+        delete animTracks[`${monitorId}:canonical.${prop}`]
+      }
+      if (source === 'manual') {
+        delete animTracks[`${monitorId}:idleOffset`]
+        delete animTracks[`${monitorId}:inactiveOffset`]
+        delete animTracks[`${monitorId}:inactiveSoftwareDim`]
+      }
+
       canonical[monitorId] = { ...getCanonical(monitorId), ...newSettings }
 
       if (source === 'manual') {
