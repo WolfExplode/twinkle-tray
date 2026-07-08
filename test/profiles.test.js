@@ -42,3 +42,14 @@ test('ignores profiles with no path set', () => {
   const withEmpty = [{ name: 'Empty', path: '' }, { name: 'Real', path: 'app.exe' }]
   assert.strictEqual(matchWindowToProfile('d\\app.exe', withEmpty).name, 'Real')
 })
+
+test('a trailing or double comma in a profile path must not match every window', () => {
+  // "chrome.exe," splits into ["chrome.exe", ""] — the empty part trims to ""
+  // and indexOf("") is 0 on any string, so it would match everything.
+  const withTrailingComma = [{ name: 'Sloppy', path: 'chrome.exe,' }]
+  assert.strictEqual(matchWindowToProfile('C:\\other\\thing.exe', withTrailingComma), undefined)
+  assert.strictEqual(matchWindowToProfile('C:\\app\\chrome.exe', withTrailingComma).name, 'Sloppy')
+
+  const withDoubleComma = [{ name: 'Doubled', path: 'a.exe,,b.exe' }]
+  assert.strictEqual(matchWindowToProfile('C:\\other\\thing.exe', withDoubleComma), undefined)
+})

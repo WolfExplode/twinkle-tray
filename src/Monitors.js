@@ -691,7 +691,6 @@ async function getHDRDisplays(monitors) {
             }
 
             updateDisplay(monitors, hwid[2], newDisplay);
-            displays[hwid[2]] = display
         }
     } catch(e) {
         console.log("\x1b[41m" + "getHDRDisplays(): failed to access displays" + "\x1b[0m", e)
@@ -1113,6 +1112,10 @@ function setBrightness(brightness, id) {
             }
         } else {
             let monitor = Object.values(monitors).find(mon => mon.type == "wmi")
+            if (!monitor) {
+                console.log("setBrightness: no WMI monitor found for id-less brightness command")
+                return
+            }
             monitor.brightness = brightness
             monitor.brightnessRaw = brightness
             if (!canUseWmiBridge || wmiFailed) {
@@ -1197,8 +1200,8 @@ async function checkVCP(monitor, code, skipCacheWrite = false) {
         return result
     } catch (e) {
         let reason = e
-        if(e.message.indexOf("the I2C bus") > 0) reason = "I2C bus error";
-        if(e.message.indexOf("does not support") > 0) reason = "VCP code unsupported";
+        if(e.message.indexOf("the I2C bus") > -1) reason = "I2C bus error";
+        if(e.message.indexOf("does not support") > -1) reason = "VCP code unsupported";
         console.log(`Error reading VCP code ${vcpString} for ${monitor}. Reason: ${reason}`)
 
         // Since it failed, let's check for an existing value first
@@ -1470,8 +1473,8 @@ async function testDDCCIMethods() {
             }
         }
         const endTimeAcc = (startTime - process.hrtime.bigint()) / BigInt(-1000000)
-        
-        wait(50)
+
+        await wait(50)
         vcpCache = {}
         monitorReports = {}
         monitorReportsRaw = {}
@@ -1509,10 +1512,10 @@ async function testDDCCIMethods() {
         console.log(`Accurate results took: ${endTimeAcc}ms`)
         console.log(`Fast results took: ${endTimeFast}ms`)
         console.log("Is fast fine?: " + fastIsFine)
-        if(failReason) console.log("Reason: " + fastIsFine);
+        if(failReason) console.log("Reason: " + failReason);
         if(!failReason) console.log(`Monitors: ${fastResults.length} | DDCCI: ${fastIDs.length}`);
         console.log("------------------------------------------")
-        wait(50)
+        await wait(50)
     } catch(e) {
         console.log("Error testing DDC/CI methods: ", e)
     }

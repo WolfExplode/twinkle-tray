@@ -15,7 +15,11 @@ function matchWindowToProfile(windowPath, profiles = []) {
   for (const profile of profiles) {
     if (profile.path?.length) {
       for (const part of profile.path.split(',')) {
-        if (windowPath.toLowerCase().indexOf(part.trim().toLowerCase()) > -1) {
+        const needle = part.trim().toLowerCase()
+        // Skip empty segments (trailing/double commas) — indexOf("") matches
+        // any string, which would apply the profile to every window.
+        if (!needle) continue
+        if (windowPath.toLowerCase().indexOf(needle) > -1) {
           foundProfile = profile
         }
       }
