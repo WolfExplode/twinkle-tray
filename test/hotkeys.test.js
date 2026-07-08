@@ -102,6 +102,24 @@ test('cycle advances to the next value on a press', async () => {
   assert.strictEqual(calls.updateBrightnessThrottle[0][1], 50)
 })
 
+test('cycle action with empty values does not wedge the reentrancy guard', async () => {
+  const { controller, calls } = makeController()
+  // Misconfigured hotkey: cycle with no values (e.g. user hasn't filled them in yet)
+  await controller.doHotkey({
+    id: 'h-broken',
+    actions: [{ type: 'cycle', target: 'brightness', values: [], allMonitors: true, monitors: {} }]
+  })
+  assert.strictEqual(calls.updateBrightnessThrottle.length, 0, 'broken hotkey writes nothing')
+
+  // A different, valid hotkey must still work afterwards — an early return that
+  // skips the doingHotkey reset would block every hotkey until app restart.
+  await controller.doHotkey({
+    id: 'h-good',
+    actions: [{ type: 'set', target: 'brightness', value: '40', allMonitors: true, monitors: {} }]
+  })
+  assert.strictEqual(calls.updateBrightnessThrottle.length, 1, 'later hotkeys must not be blocked')
+})
+
 test('breaks linked levels when configured', async () => {
   const { controller, calls } = makeController({
     settings: { sleepAction: 'ps', linkedLevelsActive: true, hotkeysBreakLinkedLevels: true }

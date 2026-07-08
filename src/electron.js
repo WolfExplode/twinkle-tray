@@ -1856,6 +1856,10 @@ function updateBrightnessThrottle(id, level, useCap = true, sendUpdate = true, v
   }
   const now = Date.now()
   if (lastBrightnessTimes[id] === undefined || now >= lastBrightnessTimes[id] + settings.updateInterval) {
+    // Applied immediately — pull the entry queued above back out, or a later
+    // flush would re-apply it as a stale value (reverting any brightness set
+    // by another source in the meantime).
+    updateBrightnessQueue.splice((found > -1 ? found : idx), 1)
     lastBrightnessTimes[id] = now
     updateBrightness(id, level, useCap, vcp, clearTransition, source)
     if (sendUpdate) touchMonitors();

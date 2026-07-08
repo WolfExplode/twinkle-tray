@@ -98,7 +98,10 @@ function createHotkeyController(deps) {
                   }
                   newValue = HotkeyActions.computeNewValue({ type: "offset", currentValue, value: action.value })
                 } else if (action.type === "cycle") {
-                  if (!action.values?.length) return -1;
+                  // Misconfigured cycle (no values): skip this action. Must not
+                  // return out of doHotkey here — that would leave doingHotkey
+                  // stuck true and block every hotkey until restart.
+                  if (!action.values?.length) break;
 
                   // Advance to the next value on the first "cycle" action of this press
                   if (!hasCheckedFirstCycleAction) {
