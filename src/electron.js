@@ -4050,16 +4050,23 @@ async function startIdleCheckShort() {
   logger.debug(`[idle:start-short] short monitor started`)
 }
 
-function isFocusedWindowFullscreen() {
+// Unconditional check — unlike isFocusedWindowFullscreen(), not gated behind
+// detectIdleCheckFullscreen. Used by Monitor Focus, where trusting cursor
+// position while a fullscreen app has focus is always wrong (see
+// monitorFocusController.js), not just an opt-in idle-detection preference.
+function getForegroundWindowFullscreen() {
   try {
-    if(!settings.detectIdleCheckFullscreen) return false;
     const focusedHwnd = WindowUtils.getForegroundWindow()
-    const isFullscreen = WindowUtils.getWindowFullscreen(focusedHwnd)
-    return isFullscreen
+    return WindowUtils.getWindowFullscreen(focusedHwnd)
   } catch(e) {
     logger.debug(e)
     return false
   }
+}
+
+function isFocusedWindowFullscreen() {
+  if (!settings.detectIdleCheckFullscreen) return false;
+  return getForegroundWindowFullscreen()
 }
 
 function isMediaPlaying() {
@@ -4201,7 +4208,8 @@ const monitorFocus = createMonitorFocusController({
   touchMonitors,
   shouldSkipDisplay,
   enableMouseEvents,
-  pauseMouseEvents
+  pauseMouseEvents,
+  isFocusedWindowFullscreen: getForegroundWindowFullscreen
 })
 
 

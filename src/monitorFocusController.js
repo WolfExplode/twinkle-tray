@@ -22,7 +22,8 @@ function createMonitorFocusController(deps) {
     touchMonitors,
     shouldSkipDisplay,
     enableMouseEvents,
-    pauseMouseEvents
+    pauseMouseEvents,
+    isFocusedWindowFullscreen
   } = deps
 
   const monitorFocusDimmed = new Set()
@@ -32,6 +33,23 @@ function createMonitorFocusController(deps) {
   let electronToMonitorMap = {}
   let cachedElectronDisplays = null
   let lastMonitorFocusMove = 0
+
+  // Fullscreen games with raw mouse-look input often don't confine the OS
+  // cursor to their monitor — Windows lets it drift invisibly across the
+  // virtual desktop even though the game only reads relative deltas. That
+  // ghost position isn't real user intent, so cursor-based tracking must
+  // freeze while a fullscreen app has focus, or aiming toward a monitor's
+  // direction falsely "visits" it (and can even dim the game's own monitor
+  // mid-play). Cached, since mousemove can fire hundreds of times/sec during
+  // gameplay and this backs onto a native GetForegroundWindow call.
+  let fullscreenCache = { value: false, checkedAt: 0 }
+  function isFullscreenFocused(now) {
+    if (!isFocusedWindowFullscreen) return false
+    if (now - fullscreenCache.checkedAt > 1000) {
+      fullscreenCache = { value: !!isFocusedWindowFullscreen(), checkedAt: now }
+    }
+    return fullscreenCache.value
+  }
 
   function invalidateDisplayCache() {
     cachedElectronDisplays = null
@@ -99,6 +117,7 @@ function createMonitorFocusController(deps) {
 
     const now = Date.now()
     if (monitorFocusDimmed.size === 0 && now - lastMonitorFocusMove < 250) return
+    if (isFullscreenFocused(now)) return
 
     const activeMonitor = getActiveMonitorFromPoint(x, y)
     if (!activeMonitor) return
@@ -123,8 +142,10 @@ function createMonitorFocusController(deps) {
     if (!monitors || store.get("idle").userIdleDimmed || store.get("idle").isWindowsUserIdle) return
     if (tempSettings.pauseIdleDetection) return
 
-    const activeMonitor = getActiveMonitorFromCursor()
     const now = Date.now()
+    if (isFullscreenFocused(now)) return
+
+    const activeMonitor = getActiveMonitorFromCursor()
     const timeout = MonitorFocus.computeTimeoutMs(settings.monitorFocusSeconds, settings.monitorFocusMinutes)
 
     if (activeMonitor) {

@@ -197,6 +197,50 @@ test('notifyInteraction resyncs: clears dim state and monitor re-dims after a fr
   }
 })
 
+test('fullscreen focus freezes tracking: mousemove ghost cursor does not restore a dimmed monitor', () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  try {
+    const fullscreen = { active: false }
+    const { deps, brightnessController } = makeDeps({ isFocusedWindowFullscreen: () => fullscreen.active })
+    const ctrl = createMonitorFocusController(deps)
+    ctrl.start()
+    mock.timers.tick(2000)
+    assert.strictEqual(ctrl.isDimmed('M2'), true)
+    brightnessController.clearCalls.length = 0
+
+    // User focuses a fullscreen game; raw mouse-look input then drifts the
+    // ghost cursor onto M2's coordinates — must not read as a real visit.
+    fullscreen.active = true
+    mock.timers.tick(1100) // clear the 1s fullscreen-check cache
+    ctrl.handleMouseMove(150, 10)
+
+    assert.strictEqual(ctrl.isDimmed('M2'), true, 'stays dimmed despite ghost cursor crossing into it')
+    assert.strictEqual(brightnessController.clearCalls.length, 0, 'no clearDimOffset issued while fullscreen-focused')
+
+    ctrl.stop()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('fullscreen focus freezes tracking: periodic poll does not dim or restore', () => {
+  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  try {
+    const { deps, brightnessController } = makeDeps({ isFocusedWindowFullscreen: () => true })
+    const ctrl = createMonitorFocusController(deps)
+    ctrl.start()
+
+    mock.timers.tick(10000)
+
+    assert.strictEqual(ctrl.isAnyDimmed(), false, 'nothing dims while fullscreen-focused, even well past timeout')
+    assert.strictEqual(brightnessController.animCalls.length, 0)
+
+    ctrl.stop()
+  } finally {
+    mock.timers.reset()
+  }
+})
+
 test('reset clears all dim state via controller', () => {
   mock.timers.enable({ apis: ['setInterval', 'Date'] })
   try {
